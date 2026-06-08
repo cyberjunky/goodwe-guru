@@ -474,12 +474,12 @@ async def create_from_template(body: dict, _: str = Depends(require_auth)):
     autos   = auto_engine.load()
     created = []
 
-    def make(name, description, logic, conditions, actions, cooldown):
+    def make(name, description, logic, conditions, actions, cooldown, hysteresis=3.0):
         a = auto_engine.Automation(
             id=auto_engine._next_id(autos + created),
             name=name, description=description,
             logic=logic, conditions=conditions, actions=actions,
-            cooldown=cooldown,
+            cooldown=cooldown, hysteresis=hysteresis,
         )
         return a
 
@@ -532,43 +532,54 @@ async def create_from_template(body: dict, _: str = Depends(require_auth)):
         min_soc      = int(params.get("min_soc", 20))
         eve_target   = int(params.get("evening_target", 85))
         export_limit = int(params.get("export_limit", 6000))
+        hyst         = float(params.get("hysteresis", 3))
 
+        # Rule 1: zero export while battery not full
+        # Hysteresis: after firing (SoC was < max_soc), won't re-fire until SoC
+        # has risen to max_soc (clearing the lt condition) and then dropped back.
+        # The pair with Rule 2 ensures no thrashing at the boundary.
         created.append(make(
             "Zero export → battery first",
-            f"No grid export while SoC<{max_soc}%",
+            f"No grid export while SoC < {max_soc}%  "
+            f"(hysteresis {hyst}% — won't re-fire until SoC rises {hyst}% above last trigger)",
             "AND",
             [{"sensor":"battery_soc","op":"lt","value":max_soc,"value2":0}],
             [{"type":"write_setting","setting":"grid_export_limit","value":0,"message":""}],
-            10,
+            10, hyst,
         ))
+        # Rule 2: restore export once full
         created.append(make(
             f"Restore export at {max_soc}%",
-            "Re-enable export when battery full",
+            f"Re-enable export when battery ≥ {max_soc}%  "
+            f"(hysteresis {hyst}% — won't re-fire until SoC drops to {max_soc - hyst:.0f}% first)",
             "AND",
             [{"sensor":"battery_soc","op":"gte","value":max_soc,"value2":0}],
             [{"type":"write_setting","setting":"grid_export_limit","value":export_limit,"message":""},
              {"type":"set_general_mode","setting":"","value":None,"message":""}],
-            10,
+            10, hyst,
         ))
+        # Rule 3: min SoC floor — night reserve protection
         created.append(make(
             f"Min SoC floor {min_soc}% (night reserve)",
-            "ECO charge if battery drops too low",
+            f"Start ECO charge if battery drops ≤ {min_soc}%  "
+            f"(hysteresis {hyst}% — re-arms once SoC rises to {min_soc + hyst:.0f}%)",
             "AND",
             [{"sensor":"battery_soc","op":"lte","value":min_soc,"value2":0}],
             [{"type":"eco_charge","setting":"","value":None,"message":""},
              {"type":"notify","setting":"","value":None,
-              "message":f"⚠️ SoC below {min_soc}% — charging started"}],
-            10,
+              "message":f"⚠️ SoC below {min_soc}% — ECO charge started"}],
+            10, hyst,
         ))
+        # Rule 4: pre-evening boost (long cooldown — fires at most once per afternoon)
         created.append(make(
-            f"Pre-evening boost (target {eve_target}%)",
-            f"ECO charge if battery below {eve_target}% before evening",
+            f"Pre-evening boost → {eve_target}%",
+            f"ECO charge if battery below {eve_target}% (cooldown 2 h — fires at most once per afternoon)",
             "AND",
             [{"sensor":"battery_soc","op":"lt","value":eve_target,"value2":0}],
             [{"type":"eco_charge","setting":"","value":None,"message":""},
              {"type":"notify","setting":"","value":None,
-              "message":f"☀️ Pre-evening charge — target {eve_target}% before dark"}],
-            120,
+              "message":f"☀️ Pre-evening charge started — target {eve_target}% before dark"}],
+            120, hyst,
         ))
 
     else:

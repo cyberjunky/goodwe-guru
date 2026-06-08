@@ -155,9 +155,22 @@ function AutomationForm({ initial, onSave, onCancel }:
         </div>
         <div>
           <label className="block text-xs text-gray-500 mb-1">Cooldown (min between re-triggers)</label>
-          <input type="number" min={1} max={1440} value={form.cooldown}
+          <input type="number" min={1} max={1440} value={(form as typeof form & { cooldown: number }).cooldown}
             onChange={e => set('cooldown', +e.target.value)}
             className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500" />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">
+            Hysteresis band
+            <span className="text-gray-600 ml-1">(prevents oscillation at boundary)</span>
+          </label>
+          <input type="number" min={0} max={50} step={0.5} value={(form as typeof form & { hysteresis: number }).hysteresis ?? 3}
+            onChange={e => set('hysteresis', +e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500" />
+          <p className="text-[10px] text-gray-600 mt-0.5">
+            Sensor must move this far away from the trigger value before the rule can fire again.
+            E.g. hysteresis=3 on a SoC≥90% rule: won't re-fire until SoC first drops to 87%.
+          </p>
         </div>
         <div className="md:col-span-2">
           <label className="block text-xs text-gray-500 mb-1">Description (optional)</label>
@@ -464,6 +477,10 @@ export default function Automations() {
 
                   <div className="flex items-center gap-4 mt-3 text-[10px] text-gray-600">
                     <span>Cooldown: {a.cooldown} min</span>
+                    {(a as Automation & { hysteresis?: number }).hysteresis != null &&
+                     (a as Automation & { hysteresis?: number }).hysteresis! > 0 && (
+                      <span>Hysteresis: ±{(a as Automation & { hysteresis?: number }).hysteresis}</span>
+                    )}
                   </div>
                 </div>
               )}

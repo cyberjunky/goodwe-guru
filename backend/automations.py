@@ -84,7 +84,12 @@ class Automation:
     conditions:    list  = field(default_factory=list)
     actions:       list  = field(default_factory=list)
     cooldown:      int   = 5            # minutes between re-triggers
+    hysteresis:    float = 3.0          # dead-band: sensor must move this far AWAY
+                                        # from trigger before rule can fire again.
+                                        # Prevents oscillation at threshold boundary.
+                                        # Unit matches the condition sensor (% for SoC, W for power).
     last_triggered: float = 0.0
+    last_trigger_values: dict = field(default_factory=dict)  # sensor_key → value at last trigger
     trigger_count: int   = 0
 
 
@@ -144,6 +149,42 @@ def _eval_condition(c: dict, data: dict) -> bool:
     return False
 
 
+def _has_recovered(automation: dict, data: dict) -> bool:
+    """
+    Hysteresis check: after a rule fires, the PRIMARY condition sensor must
+    move at least `hysteresis` units away from its trigger value before the
+    rule is allowed to fire again.
+
+    Primary sensor = sensor of the first condition in the list.
+    If there are no prior trigger values, the rule is free to fire.
+    """
+    hyst      = float(automation.get("hysteresis", 0))
+    ltv       = automation.get("last_trigger_values") or {}
+    conditions = automation.get("conditions", [])
+
+    if not ltv or hyst <= 0:
+        return True   # no history yet or hysteresis disabled → allow
+
+    for c in conditions:
+        sensor  = c.get("sensor", "")
+        prev    = ltv.get(sensor)
+        if prev is None:
+            continue
+        current = float(data.get(sensor, 0))
+        op      = c.get("op", "gt")
+        # Determine which direction is "away" from the trigger
+        # For gt/gte conditions: "away" means current < (prev - hyst)
+        # For lt/lte conditions: "away" means current > (prev + hyst)
+        if op in ("gt", "gte", "between"):
+            if current >= (prev - hyst):
+                return False   # hasn't recovered downward enough
+        elif op in ("lt", "lte"):
+            if current <= (prev + hyst):
+                return False   # hasn't recovered upward enough
+
+    return True
+
+
 def check(automation: Automation | dict, data: dict) -> bool:
     if isinstance(automation, Automation):
         automation = asdict(automation)
@@ -151,6 +192,9 @@ def check(automation: Automation | dict, data: dict) -> bool:
         return False
     conditions = automation.get("conditions", [])
     if not conditions:
+        return False
+    # Hysteresis: must have recovered from last trigger before firing again
+    if not _has_recovered(automation, data):
         return False
     results = [_eval_condition(c, data) for c in conditions]
     logic   = automation.get("logic", "AND")
@@ -246,7 +290,7 @@ async def run_loop(get_data, get_inverter):
                 if (now - a.last_triggered) < a.cooldown * 60:
                     continue
                 if check(a, data):
-                    log.info("Automation '%s' triggered", a.name)
+                    log.info("Automation '%s' triggered (count=%d)", a.name, a.trigger_count + 1)
                     results = []
                     for act in a.actions:
                         try:
@@ -257,6 +301,11 @@ async def run_loop(get_data, get_inverter):
                             results.append(f"error: {e}")
                     a.last_triggered  = now
                     a.trigger_count  += 1
+                    # Record sensor values at trigger time for hysteresis tracking
+                    a.last_trigger_values = {
+                        c["sensor"]: float(data.get(c["sensor"], 0))
+                        for c in a.conditions if "sensor" in c
+                    }
                     changed = True
 
                     # Telegram summary of trigger
@@ -443,6 +492,9 @@ TEMPLATES = [
              "min": 60, "max": 100, "default": 85},
             {"key": "export_limit", "label": "Normal export limit (W)", "type": "number",
              "min": 0,  "max": 15000, "default": 6000},
+            {"key": "hysteresis", "label": "Hysteresis band (%)", "type": "number",
+             "min": 1,  "max": 15,   "default": 3,
+             "hint": "SoC must move this far from trigger before rule can re-fire. Prevents oscillation."},
         ],
     },
     {
