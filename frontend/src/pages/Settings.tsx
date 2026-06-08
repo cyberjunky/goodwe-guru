@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useInverter } from '../context/InverterContext'
-import { Settings as SettingsIcon, Save, RefreshCw, AlertCircle, Euro, Bell, Send, CheckCircle2 } from 'lucide-react'
+import { Settings as SettingsIcon, Save, RefreshCw, AlertCircle, Euro, Bell, Send, CheckCircle2, DownloadCloud, GitCommit, Server } from 'lucide-react'
 
 const WORK_MODES = [
   { value: 0, label: 'General Mode', desc: 'Standard grid-tied — charges from PV, exports excess' },
@@ -380,7 +380,108 @@ function NotificationSettings() {
   )
 }
 
-type SettingsTab = 'inverter' | 'tariffs' | 'notifications'
+type SettingsTab = 'inverter' | 'tariffs' | 'notifications' | 'system'
+
+interface VersionInfo { commit?: string; branch?: string; date?: string; subject?: string }
+type UpdateState = 'idle' | 'requested' | 'running' | 'ok' | 'failed'
+
+function SystemSettings() {
+  const token   = localStorage.getItem('gw_token') ?? ''
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  const [ver, setVer]     = useState<VersionInfo>({})
+  const [state, setState] = useState<UpdateState>('idle')
+  const [message, setMessage] = useState('')
+  const [busy, setBusy]   = useState(false)
+
+  async function refresh() {
+    try {
+      const r = await fetch('/api/update/status', { headers })
+      if (r.ok) {
+        const j = await r.json()
+        setVer(j.version ?? {})
+        if (j.update?.state) setState(j.update.state)
+        if (j.update?.message) setMessage(j.update.message)
+      }
+    } catch {
+      // Backend is briefly down while it restarts mid-update — keep showing progress
+      setState(s => (s === 'requested' || s === 'running' ? 'running' : s))
+    }
+  }
+
+  useEffect(() => { refresh() }, [])
+  useEffect(() => {
+    if (state === 'requested' || state === 'running') {
+      const t = setInterval(refresh, 3000)
+      return () => clearInterval(t)
+    }
+  }, [state])
+
+  async function doUpdate() {
+    if (!confirm('Update GoodWe Guru to the latest version?\nThe dashboard will rebuild and restart (≈1–2 min).')) return
+    setBusy(true)
+    try {
+      const r = await fetch('/api/update', { method: 'POST', headers })
+      if (r.ok) { setState('requested'); setMessage('') }
+    } finally { setBusy(false) }
+  }
+
+  const busyState = state === 'requested' || state === 'running'
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-3">
+        <Server className="text-gray-400" size={22} />
+        <h1 className="text-xl font-semibold text-white">System</h1>
+      </div>
+
+      {/* Version */}
+      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-4">Installed version</h2>
+        <div className="flex items-center gap-3 text-sm text-gray-300">
+          <GitCommit size={16} className="text-gray-500" />
+          {ver.commit
+            ? <span className="font-mono">{ver.commit}</span>
+            : <span className="text-gray-600">unknown</span>}
+          {ver.branch && <span className="text-gray-600">· {ver.branch}</span>}
+          {ver.date   && <span className="text-gray-600">· {ver.date}</span>}
+        </div>
+        {ver.subject && <div className="text-xs text-gray-500 mt-2 leading-snug">{ver.subject}</div>}
+      </div>
+
+      {/* Update */}
+      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4">
+        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide">Update</h2>
+        <p className="text-xs text-gray-500 leading-relaxed">
+          Pulls the latest code from GitHub, rebuilds the frontend, and restarts the service.
+          The dashboard will be briefly unavailable while it restarts.
+        </p>
+
+        <button onClick={doUpdate} disabled={busy || busyState}
+          className="flex items-center gap-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-gray-950 font-medium text-sm px-4 py-2 rounded-lg transition-colors">
+          {busyState
+            ? <><RefreshCw size={15} className="animate-spin" /> Updating…</>
+            : <><DownloadCloud size={15} /> Check for updates &amp; install</>}
+        </button>
+
+        {state === 'ok' && (
+          <div className="flex items-center gap-2 text-sm text-emerald-400">
+            <CheckCircle2 size={15} /> Up to date — running {ver.commit}
+          </div>
+        )}
+        {state === 'failed' && (
+          <div className="flex items-center gap-2 text-sm text-red-400">
+            <AlertCircle size={15} /> Update failed{message ? ` — ${message}` : ''}. Check <span className="font-mono">update.log</span>.
+          </div>
+        )}
+        {busyState && (
+          <div className="text-xs text-gray-500">
+            Working… this can take 1–2 minutes. The page may briefly disconnect — it will reconnect automatically.
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 export default function Settings() {
   const [tab, setTab] = useState<SettingsTab>('inverter')
@@ -411,6 +512,7 @@ export default function Settings() {
     { key: 'inverter',      label: 'Inverter',      icon: <SettingsIcon size={14} /> },
     { key: 'tariffs',       label: 'Tariffs',       icon: <Euro size={14} /> },
     { key: 'notifications', label: 'Notifications', icon: <Bell size={14} /> },
+    { key: 'system',        label: 'System',        icon: <Server size={14} /> },
   ]
 
   return (
@@ -427,6 +529,7 @@ export default function Settings() {
 
       {tab === 'tariffs'       && <TariffSettings />}
       {tab === 'notifications' && <NotificationSettings />}
+      {tab === 'system'        && <SystemSettings />}
       {tab === 'inverter'      && <>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">

@@ -9,6 +9,8 @@ BeagleBone RS485/CAN BMS bridge via /ws/bms.
 import asyncio
 import json
 import logging
+import subprocess
+import time
 import traceback
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -235,6 +237,70 @@ async def get_status(_: str = Depends(require_auth)):
         "arm_fw":    getattr(inverter, "arm_firmware", None) if inverter else None,
         "data":      latest_data,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Self-update (GUI "Update" button)
+#
+# The systemd service is sandboxed (ReadOnlyPaths=$APP_DIR, NoNewPrivileges) and
+# cannot update or restart itself. Instead it drops a trigger file in its
+# writable data dir; a privileged `goodwe-guru-update.path` unit notices the
+# file and runs update.sh (git pull + rebuild + restart). The trigger content is
+# never executed — the action is fixed — so this grants the app no extra rights.
+# ─────────────────────────────────────────────────────────────────────────────
+APP_DIR        = Path(__file__).resolve().parent.parent
+DATA_DIR       = Path(cfg.db_path).resolve().parent
+UPDATE_TRIGGER = DATA_DIR / ".update-request"
+UPDATE_STATUS  = DATA_DIR / ".update-status.json"
+
+
+def _git_version() -> dict:
+    def g(*args: str) -> str:
+        try:
+            return subprocess.run(
+                ["git", "-C", str(APP_DIR), *args],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+        except Exception:
+            return ""
+    return {
+        "commit":  g("rev-parse", "--short", "HEAD"),
+        "branch":  g("rev-parse", "--abbrev-ref", "HEAD"),
+        "date":    g("log", "-1", "--format=%cd", "--date=short"),
+        "subject": g("log", "-1", "--format=%s"),
+    }
+
+
+@app.get("/api/version")
+async def get_version(_: str = Depends(require_auth)):
+    return _git_version()
+
+
+@app.post("/api/update")
+async def trigger_update(_: str = Depends(require_auth)):
+    if not DATA_DIR.exists():
+        raise HTTPException(500, f"Data dir missing: {DATA_DIR}")
+    try:
+        UPDATE_STATUS.write_text(json.dumps({"state": "requested", "ts": int(time.time())}))
+        UPDATE_TRIGGER.write_text(str(int(time.time())))
+    except Exception as e:
+        raise HTTPException(500, f"Could not request update: {e}")
+    log.info("Update requested via API — trigger written to %s", UPDATE_TRIGGER)
+    return {"started": True}
+
+
+@app.get("/api/update/status")
+async def get_update_status(_: str = Depends(require_auth)):
+    st: dict = {"state": "idle"}
+    if UPDATE_STATUS.exists():
+        try:
+            st = json.loads(UPDATE_STATUS.read_text())
+        except Exception:
+            pass
+    # Trigger present but updater hasn't picked it up yet
+    if UPDATE_TRIGGER.exists() and st.get("state") not in ("running", "requested"):
+        st = {"state": "requested"}
+    return {"version": _git_version(), "update": st}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -332,6 +332,37 @@ systemctl daemon-reload
 systemctl enable --now "$SERVICE_NAME"
 ok "Systemd service enabled and started"
 
+# ── GUI-triggered updates ──────────────────────────────────────────────────────
+# The sandboxed dashboard can't update itself, so it drops a trigger file in
+# DATA_DIR. This privileged path-unit notices the file and runs the updater
+# (git pull + rebuild + restart). The trigger content is never executed.
+info "Enabling dashboard 'Update' button …"
+cat > "/etc/systemd/system/${SERVICE_NAME}-update.service" <<EOF
+[Unit]
+Description=GoodWe Guru — apply update (triggered from dashboard)
+
+[Service]
+Type=oneshot
+Environment=APP_DIR=${APP_DIR} DATA_DIR=${DATA_DIR} SERVICE_NAME=${SERVICE_NAME} SERVICE_USER=${SERVICE_USER}
+ExecStart=${APP_DIR}/update.sh
+EOF
+
+cat > "/etc/systemd/system/${SERVICE_NAME}-update.path" <<EOF
+[Unit]
+Description=Watch for GoodWe Guru update requests
+
+[Path]
+PathExists=${DATA_DIR}/.update-request
+Unit=${SERVICE_NAME}-update.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now "${SERVICE_NAME}-update.path"
+ok "Dashboard 'Update' button enabled"
+
 # ── UFW firewall ──────────────────────────────────────────────────────────────
 info "Configuring UFW firewall …"
 ufw --force reset >/dev/null 2>&1

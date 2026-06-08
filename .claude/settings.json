@@ -3,7 +3,10 @@
     "allow": [
       "Bash(bash -n /c/Users/ronkl/Development/goodwe-guru/install.sh)",
       "Bash(git add *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(git fetch *)",
+      "Bash(bash -n /c/Users/ronkl/Development/goodwe-guru/update.sh)",
+      "Bash(npx tsc *)"
     ]
   }
 }

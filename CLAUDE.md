@@ -78,6 +78,19 @@ Direction conventions (arm paths go FROM satellite node TO junction):
 - No `maxWidth` cap on Dashboard — fills full browser width.
 - Mobile: bottom nav bar; desktop: left sidebar (14px icons, 52px wide collapsed).
 
+## Updates
+
+In-container updates without a reinstall:
+- `update.sh` (symlinked to `goodwe-guru-update`): git pull + rebuild frontend +
+  refresh Python deps + restart service. `--quick` skips rebuilds; takes an
+  optional git ref.
+- GUI "Update" button (Settings → System): the sandboxed service can't update
+  itself, so `POST /api/update` drops a trigger file in `DATA_DIR`; a privileged
+  `goodwe-guru-update.path` systemd unit notices it and runs `update.sh`.
+  Progress is exposed via `GET /api/update/status` (reads `.update-status.json`).
+  Trigger content is never executed — the action is fixed, so the app gains no
+  extra privileges.
+
 ## Future work (planned)
 
 - BeagleBone RS485/CAN bridge for per-cell BMS data → `/ws/bms` endpoint already exists.

@@ -17,15 +17,33 @@
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/goodwe-guru}"
+DATA_DIR="${DATA_DIR:-/data/goodwe-guru}"
 SERVICE_NAME="${SERVICE_NAME:-goodwe-guru}"
 SERVICE_USER="${SERVICE_USER:-goodwe}"
+
+TRIGGER="$DATA_DIR/.update-request"
+STATUS="$DATA_DIR/.update-status.json"
+LOG="$DATA_DIR/update.log"
+
+# ── Status file (read by the dashboard's Update button) ────────────────────────
+_status() { # state [message]
+  [[ -d "$DATA_DIR" ]] || return 0
+  local commit; commit="$(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo '')"
+  printf '{"state":"%s","commit":"%s","ts":%s,"message":"%s"}\n' \
+    "$1" "$commit" "$(date +%s)" "${2:-}" > "$STATUS" 2>/dev/null || true
+}
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[1;33m'; BLU='\033[0;34m'; NC='\033[0m'
 info()  { echo -e "${BLU}[INFO]${NC}  $*"; }
 ok()    { echo -e "${GRN}[ OK ]${NC}  $*"; }
 warn()  { echo -e "${YLW}[WARN]${NC}  $*"; }
-error() { echo -e "${RED}[ERR ]${NC}  $*" >&2; exit 1; }
+error() { echo -e "${RED}[ERR ]${NC}  $*" >&2; _status failed "$*"; exit 1; }
+
+# Consume the GUI trigger (if any) and mirror output to the update log
+rm -f "$TRIGGER" 2>/dev/null || true
+[[ -d "$DATA_DIR" ]] && exec > >(tee -a "$LOG") 2>&1
+trap '_status failed "unexpected error — see update.log"' ERR
 
 # ── Parse args (a --quick flag plus an optional git ref, any order) ────────────
 QUICK=false
@@ -43,6 +61,7 @@ done
 
 cd "$APP_DIR"
 BEFORE=$(git rev-parse --short HEAD)
+_status running
 
 info "Fetching latest code …"
 git fetch --all --prune --quiet
@@ -83,6 +102,7 @@ info "Restarting $SERVICE_NAME …"
 systemctl restart "$SERVICE_NAME"
 sleep 2
 if systemctl is-active --quiet "$SERVICE_NAME"; then
+  _status ok
   ok "Update complete — $SERVICE_NAME running at $AFTER"
 else
   error "Service failed to start. Logs: journalctl -u $SERVICE_NAME -n 50 --no-pager"
