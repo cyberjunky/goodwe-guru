@@ -182,6 +182,7 @@ EOF
   echo -e "  ${BLU}Password     :${NC} ${APP_PASSWORD}"
   $PASSWORD_GENERATED && echo -e "               ${YLW}(auto-generated — save it now)${NC}"
   echo -e "  ${BLU}Logs         :${NC} pct exec $VMID -- journalctl -u $SERVICE_NAME -f"
+  echo -e "  ${BLU}Update       :${NC} pct exec $VMID -- goodwe-guru-update"
   echo ""
   exit 0
 fi
@@ -248,6 +249,15 @@ else
   git clone "$REPO_URL" "$APP_DIR"
 fi
 chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
+
+# ── Install the 'goodwe-guru-update' convenience command ───────────────────────
+# Pull latest code + rebuild + restart, without a full reinstall:
+#   goodwe-guru-update            (full)     goodwe-guru-update --quick   (fast)
+if [[ -f "$APP_DIR/update.sh" ]]; then
+  ln -sf "$APP_DIR/update.sh" /usr/local/bin/goodwe-guru-update
+  chmod +x "$APP_DIR/update.sh"
+  ok "Installed 'goodwe-guru-update' command"
+fi
 
 # ── Python venv ───────────────────────────────────────────────────────────────
 info "Installing Python dependencies …"
@@ -519,6 +529,10 @@ ${PASSWORD_GENERATED:-false} && echo -e "              ${YLW}(auto-generated —
 echo -e "  ${BLU}Config      :${NC} ${DATA_DIR}/config.env"
 echo -e "  ${BLU}Logs        :${NC} journalctl -u ${SERVICE_NAME} -f"
 echo -e "  ${BLU}Service     :${NC} systemctl status ${SERVICE_NAME}"
+echo ""
+echo -e "  To update to the latest code:"
+echo -e "    goodwe-guru-update            (full)"
+echo -e "    goodwe-guru-update --quick    (pull + restart only)"
 echo ""
 echo -e "  To change password / inverter IP:"
 echo -e "    nano ${DATA_DIR}/config.env"
