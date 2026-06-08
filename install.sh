@@ -40,34 +40,40 @@ NODE_MAJOR=20
 REPO_URL="${REPO_URL:-https://github.com/cyberjunky/goodwe-guru.git}"
 
 # ── Interactive prompts ───────────────────────────────────────────────────────
-echo ""
-echo -e "${YLW}╔══════════════════════════════════════════╗${NC}"
-echo -e "${YLW}║      GoodWe Guru — Setup Wizard       ║${NC}"
-echo -e "${YLW}╚══════════════════════════════════════════╝${NC}"
-echo ""
+# Skip the whole wizard when values are already supplied via the environment.
+# This is the case for the in-container re-exec (`bash -s < "$0"`), where stdin
+# IS the script — running `read` there would consume the script's own lines and
+# desync execution (symptom: "info: command not found").
+PASSWORD_GENERATED=false
+if [[ -z "${INVERTER_HOST:-}" ]]; then
+  echo ""
+  echo -e "${YLW}╔══════════════════════════════════════════╗${NC}"
+  echo -e "${YLW}║      GoodWe Guru — Setup Wizard       ║${NC}"
+  echo -e "${YLW}╚══════════════════════════════════════════╝${NC}"
+  echo ""
 
-read -rp "  GoodWe inverter IP address         : " INVERTER_HOST
-[[ -z "$INVERTER_HOST" ]] && error "Inverter IP is required"
+  read -rp "  GoodWe inverter IP address         : " INVERTER_HOST
+  [[ -z "$INVERTER_HOST" ]] && error "Inverter IP is required"
 
-read -rp "  Dashboard password (blank = auto-gen): " -s APP_PASSWORD; echo
-if [[ -z "$APP_PASSWORD" ]]; then
-  APP_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(16))" 2>/dev/null \
-                 || openssl rand -base64 18 | tr -d '/+=')
-  PASSWORD_GENERATED=true
-  ok "Auto-generated dashboard password — shown in the summary below"
-else
-  PASSWORD_GENERATED=false
-  [[ ${#APP_PASSWORD} -lt 8 ]] && { warn "Password is short (< 8 chars) — consider a stronger one"; }
+  read -rp "  Dashboard password (blank = auto-gen): " -s APP_PASSWORD; echo
+  if [[ -z "$APP_PASSWORD" ]]; then
+    APP_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(16))" 2>/dev/null \
+                   || openssl rand -base64 18 | tr -d '/+=')
+    PASSWORD_GENERATED=true
+    ok "Auto-generated dashboard password — shown in the summary below"
+  else
+    [[ ${#APP_PASSWORD} -lt 8 ]] && { warn "Password is short (< 8 chars) — consider a stronger one"; }
+  fi
+
+  read -rp "  Poll interval in seconds [10]       : " POLL_INTERVAL
+  POLL_INTERVAL=${POLL_INTERVAL:-10}
+
+  read -rp "  Domain/subdomain for HTTPS          : " DOMAIN
+  read -rp "  (leave blank to use IP-only / HTTP)   "
+
+  JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null \
+               || openssl rand -hex 32)
 fi
-
-read -rp "  Poll interval in seconds [10]       : " POLL_INTERVAL
-POLL_INTERVAL=${POLL_INTERVAL:-10}
-
-read -rp "  Domain/subdomain for HTTPS          : " DOMAIN
-read -rp "  (leave blank to use IP-only / HTTP)   "
-
-JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null \
-             || openssl rand -hex 32)
 
 # =============================================================================
 # ── PROXMOX: CREATE LXC ───────────────────────────────────────────────────────
@@ -122,7 +128,7 @@ if $ON_PROXMOX; then
     --rootfs "$STORAGE:4" \
     --net0 "name=eth0,bridge=vmbr0,ip=dhcp,firewall=1" \
     --unprivileged 1 \
-    --features "nesting=0" \
+    --features "nesting=1" \
     --onboot 1 \
     --start 1 \
     --description "GoodWe Guru — solar dashboard"
