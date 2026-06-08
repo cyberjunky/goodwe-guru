@@ -21,7 +21,8 @@ export function DemoProvider({ children }: { children: ReactNode }) {
       history:      buildLiveHistory(),
       status:       'connected' as ConnectionStatus,
       lastUpdate,
-      settings:     MOCK_SETTINGS,
+      settings:     { ...MOCK_SETTINGS, platform: 'ET' },
+      platform:     'ET',
       loadSettings: () => {},
       writeSetting: async () => {},
     }}>

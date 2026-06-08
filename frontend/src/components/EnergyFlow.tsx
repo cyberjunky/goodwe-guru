@@ -1,336 +1,238 @@
 /**
  * EnergyFlow — animated energy diagram.
  *
- * Layout (SVG viewBox 440×440, scales to container width):
+ * Direction is shown via "marching dash" stroke animation on each arm.
+ * Dashes travel from source to destination — unambiguous at any power level.
  *
- *           ☀ Solar  (top-center)
- *               |
- *  ⚡ Grid ─── ● ─── 🏠 Home
- *               |
- *           🔋 Battery (bottom-center)
- *
- * SVG paths + JS rAF loop for 60 fps dot animation.
- * Dot speed & count scale with power; direction shows flow direction.
+ * Directions (path defined from satellite node TO hub):
+ *   Solar   : always node→hub
+ *   Grid    : node→hub = import (pgrid>0), hub→node = export (pgrid<0)
+ *   Battery : hub→node = charging (pbattery>0), node→hub = discharging (<0)
+ *   Home    : always hub→node
  */
-
 import { useEffect, useRef } from 'react'
 
 interface Props {
-  ppv:      number   // W – solar (≥ 0)
-  pbattery: number   // W – positive = charging, negative = discharging
-  pgrid:    number   // W – positive = importing, negative = exporting
-  pload:    number   // W – home consumption
-  soc:      number   // %
+  ppv: number; pbattery: number; pgrid: number; pload: number; soc: number
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Layout constants (in SVG user units, viewBox 0 0 440 440)
-// ─────────────────────────────────────────────────────────────────────────────
-const VB   = 440
-const CX   = VB / 2   // 220 — hub x
-const CY   = VB / 2   // 220 — hub y
-const NR   = 44       // node radius
-const HR   = 9        // hub radius
-
-const POS = {
-  solar:   { x: CX,          y: 52  },
-  grid:    { x: 52,          y: CY  },
-  home:    { x: VB - 52,     y: CY  },
-  battery: { x: CX,          y: VB - 52 },
-  hub:     { x: CX,          y: CY  },
+// ── Layout ────────────────────────────────────────────────────────────────────
+const W = 480, H = 380, CX = W / 2, CY = H / 2
+const NR = 54  // node radius
+const NODE = {
+  solar: { x: CX,      y: 52  },
+  grid:  { x: 70,      y: CY  },
+  home:  { x: W - 70,  y: CY  },
+  bat:   { x: CX,      y: H - 52 },
 }
-
-// Path d attributes (quadratic bezier for slight organic curve)
-// Each arm connects node edge → hub edge
-const GAP = NR + 6
-const HG  = HR + 4
-
+// Paths: each goes FROM satellite node TO hub centre
+const G = NR + 8, HG = 8
 const PATHS = {
-  solar: `M ${CX} ${POS.solar.y   + GAP} Q ${CX - 14} ${CY - 40} ${CX} ${CY - HG}`,
-  grid:  `M ${POS.grid.x  + GAP} ${CY} Q ${CX - 40} ${CY - 14} ${CX - HG} ${CY}`,
-  home:  `M ${POS.home.x  - GAP} ${CY} Q ${CX + 40} ${CY + 14} ${CX + HG} ${CY}`,
-  bat:   `M ${CX} ${POS.battery.y - GAP} Q ${CX + 14} ${CY + 40} ${CX} ${CY + HG}`,
+  solar: `M ${CX},${NODE.solar.y + G} Q ${CX - 22},${CY - 55} ${CX},${CY - HG}`,
+  grid:  `M ${NODE.grid.x + G},${CY} Q ${CX - 55},${CY + 22} ${CX - HG},${CY}`,
+  home:  `M ${NODE.home.x - G},${CY} Q ${CX + 55},${CY - 22} ${CX + HG},${CY}`,
+  bat:   `M ${CX},${NODE.bat.y - G} Q ${CX + 22},${CY + 55} ${CX},${CY + HG}`,
 } as const
-
 type ArmKey = keyof typeof PATHS
 
-const COLORS: Record<ArmKey, string> = {
-  solar: '#f0a820',   // warm gold
-  grid:  '#5590e0',   // steel blue
-  home:  '#9265d4',   // soft purple
-  bat:   '#00c49a',   // teal-green
-}
+// ── Colour palette ────────────────────────────────────────────────────────────
+const COL = { solar:'#f0a820', grid_imp:'#e06058', grid_exp:'#00c49a',
+               home:'#7b6ef0', bat_chg:'#00c49a', bat_dis:'#e0881c' }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper – label with power
-// ─────────────────────────────────────────────────────────────────────────────
-function fmtW(w: number) {
-  const a = Math.abs(w)
-  return a >= 1000 ? `${(a / 1000).toFixed(2)} kW` : `${Math.round(a)} W`
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const fmt = (w:number) => { const a=Math.abs(w); return a>=1000?`${(a/1000).toFixed(2)} kW`:`${Math.round(a)} W` }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Dot config from power
-// ─────────────────────────────────────────────────────────────────────────────
-const MAX_DOTS = 5   // per arm
-
-function dotParams(watts: number): { count: number; period: number } {
+// Dash animation period: faster = more power
+function period(watts: number) {
   const a = Math.abs(watts)
-  if (a <   30) return { count: 0, period: 0 }
-  if (a <  400) return { count: 1, period: 2.6 }
-  if (a < 1200) return { count: 2, period: 2.2 }
-  if (a < 2500) return { count: 3, period: 1.8 }
-  if (a < 4000) return { count: 4, period: 1.4 }
-  return             { count: 5, period: 1.1 }
+  if (a < 30)   return 0
+  if (a < 300)  return 2.6
+  if (a < 800)  return 2.0
+  if (a < 2000) return 1.4
+  return 1.0
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Component
-// ─────────────────────────────────────────────────────────────────────────────
-interface DotSpec {
-  arm: ArmKey
-  offset: number    // 0-1 stagger offset
-  period: number    // seconds for full traversal
-  reverse: boolean
-  color: string
+// ── Icons (SVG paths, 24×24 origin) ──────────────────────────────────────────
+const ICON = {
+  sun: (c:string) => (
+    <g>
+      <circle cx="0" cy="0" r="5" fill="none" stroke={c} strokeWidth="2"/>
+      {[0,45,90,135,180,225,270,315].map(a => {
+        const r=a*Math.PI/180, x1=7.5*Math.cos(r), y1=7.5*Math.sin(r)
+        return <line key={a} x1={x1} y1={y1} x2={x1*10/7.5} y2={y1*10/7.5} stroke={c} strokeWidth="2" strokeLinecap="round"/>
+      })}
+    </g>
+  ),
+  bolt: (c:string) => <polygon points="5,-10 -3,2 3,2 1,10 9,-2 3,-2" fill={c}/>,
+  home: (c:string) => (
+    <g fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="-9,-1 0,-9 9,-1"/>
+      <path d="-7,-1 -7,8 -3,8 -3,3 3,3 3,8 7,8 7,-1"/>
+    </g>
+  ),
 }
 
+// ── Component ─────────────────────────────────────────────────────────────────
 export default function EnergyFlow({ ppv, pbattery, pgrid, pload, soc }: Props) {
-  // Refs to the 4 SVG path elements (for getTotalLength / getPointAtLength)
-  const pathRefs = useRef<Partial<Record<ArmKey, SVGPathElement | null>>>({})
-  // Flat array of dot <circle> DOM elements (MAX_DOTS × 4 arms)
-  const dotEls   = useRef<(SVGCircleElement | null)[]>(Array(MAX_DOTS * 4).fill(null))
-  // Dot positions (t: 0-1 along arm)
-  const dotsT    = useRef<number[]>(Array(MAX_DOTS * 4).fill(0))
-  const specsRef = useRef<DotSpec[]>([])
-  const frameRef = useRef<number>(0)
-  const lastRef  = useRef<number>(0)
+  // Refs to animated paths (for dynamic dur/direction updates)
+  const animRefs = useRef<Partial<Record<ArmKey, SVGAnimateElement|null>>>({})
 
-  // ── Build dot spec list when power changes ────────────────────────────────
+  const pvOn   = ppv      > 30
+  const gImp   = pgrid    > 30
+  const gExp   = pgrid    < -30
+  const bChg   = pbattery > 30
+  const bDis   = pbattery < -30
+  const hOn    = pload    > 30
+
+  // Per-arm: active, color, reverse (hub→node instead of node→hub)
+  const cfg = {
+    solar: { on: pvOn,       color: COL.solar,    reverse: false,  power: ppv       },
+    grid:  { on: gImp||gExp, color: gExp?COL.grid_exp:COL.grid_imp, reverse: gExp, power: pgrid },
+    home:  { on: hOn,        color: COL.home,     reverse: true,   power: pload     },
+    bat:   { on: bChg||bDis, color: bChg?COL.bat_chg:COL.bat_dis, reverse: bChg,  power: pbattery },
+  } as const satisfies Record<ArmKey, {on:boolean; color:string; reverse:boolean; power:number}>
+
+  // Update SVG animate elements when power changes
   useEffect(() => {
-    const arms: { arm: ArmKey; watts: number; reverse: boolean }[] = [
-      { arm: 'solar', watts: ppv,                   reverse: false },
-      { arm: 'grid',  watts: pgrid,                 reverse: pgrid < 0 },
-      { arm: 'home',  watts: pload,                 reverse: true  },
-      { arm: 'bat',   watts: pbattery,              reverse: pbattery > 0 },
-    ]
-
-    const next: DotSpec[] = []
-    arms.forEach(({ arm, watts, reverse }) => {
-      const { count, period } = dotParams(watts)
-      for (let i = 0; i < count; i++) {
-        next.push({ arm, offset: i / Math.max(count, 1), period, reverse, color: COLORS[arm] })
+    for (const [key, a] of Object.entries(cfg) as [ArmKey, typeof cfg[ArmKey]][]) {
+      const el = animRefs.current[key]
+      if (!el) continue
+      if (!a.on || period(a.power) === 0) {
+        el.setAttribute('dur', '999999s')
+        ;(el.parentElement as SVGElement | null)?.setAttribute('stroke-dasharray', '0 999')
+        continue
       }
-    })
-    specsRef.current = next
-  }, [ppv, pbattery, pgrid, pload])
-
-  // ── Animation loop ────────────────────────────────────────────────────────
-  useEffect(() => {
-    function tick(now: number) {
-      const dt = Math.min((now - (lastRef.current || now)) / 1000, 0.05)
-      lastRef.current = now
-
-      const specs = specsRef.current
-
-      // Hide all dots first
-      dotEls.current.forEach(el => { if (el) el.style.opacity = '0' })
-
-      specs.forEach((spec, si) => {
-        if (si >= dotEls.current.length) return
-        const el   = dotEls.current[si]
-        const path = pathRefs.current[spec.arm]
-        if (!el || !path) return
-
-        // Advance t
-        dotsT.current[si] = ((dotsT.current[si] ?? spec.offset) + dt / spec.period) % 1
-
-        const t      = (dotsT.current[si] + spec.offset) % 1
-        const tFinal = spec.reverse ? 1 - t : t
-        const len    = path.getTotalLength()
-        const pt     = path.getPointAtLength(tFinal * len)
-
-        el.setAttribute('cx', pt.x.toString())
-        el.setAttribute('cy', pt.y.toString())
-        el.style.opacity = '1'
-      })
-
-      frameRef.current = requestAnimationFrame(tick)
+      const dashPeriod = 28  // total dash+gap in SVG units
+      ;(el.parentElement as SVGElement | null)?.setAttribute('stroke-dasharray', `10 18`)
+      el.setAttribute('dur', `${period(a.power)}s`)
+      // reverse=false → dashoffset goes 0→-28 (dashes flow forward along path)
+      // reverse=true  → dashoffset goes 0→+28 (dashes flow backward = hub→node)
+      el.setAttribute('from', '0')
+      el.setAttribute('to',   a.reverse ? `${dashPeriod}` : `-${dashPeriod}`)
     }
+  })
 
-    frameRef.current = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(frameRef.current)
-  }, [])
-
-  // ── Derived states ────────────────────────────────────────────────────────
-  const pvOn     = ppv      >  30
-  const gridImp  = pgrid    >  30
-  const gridExp  = pgrid    < -30
-  const batChg   = pbattery >  30
-  const batDis   = pbattery < -30
-
-  // SoC arc path for battery node
+  // SoC arc
   const socArc = (() => {
-    if (soc <= 0) return ''
-    const r    = NR - 6
-    const bx   = POS.battery.x, by = POS.battery.y
-    const start = { x: bx, y: by - r }        // top of circle
-    const end = {
-      x: bx + r * Math.sin((soc / 100) * 2 * Math.PI),
-      y: by - r * Math.cos((soc / 100) * 2 * Math.PI),
-    }
-    const large = soc > 50 ? 1 : 0
-    return `M ${start.x},${start.y} A ${r},${r} 0 ${large},1 ${end.x},${end.y}`
+    if (soc < 2) return ''
+    const r = NR - 8, bx = NODE.bat.x, by = NODE.bat.y
+    const a = (soc / 100) * 2 * Math.PI
+    return `M ${bx},${by-r} A ${r},${r} 0 ${soc>50?1:0},1 ${bx+r*Math.sin(a)},${by-r*Math.cos(a)}`
   })()
+  const socCol = soc > 60 ? COL.bat_chg : soc > 20 ? COL.solar : '#e06058'
 
-  const socColor = soc > 60 ? '#00c49a' : soc > 20 ? '#f0a820' : '#e06058'
+  // ─── Node helper ─────────────────────────────────────────────────────────
+  const nodeFill   = (on:boolean, c:string) => on ? `${c}16` : '#09111e'
+  const nodeStroke = (on:boolean, c:string) => on ? `${c}80` : '#18283d'
 
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="rounded-2xl p-4" style={{ background: 'linear-gradient(145deg, #0e1829 0%, #0a1322 100%)', border: '1px solid #1a2a44' }}>
-      <h2 className="text-[11px] font-semibold text-gray-500 uppercase tracking-widest mb-2 px-1">Energy Flow</h2>
+    <div style={{background:'linear-gradient(160deg,#0c1525 0%,#080d18 100%)',border:'1px solid #18283d',borderRadius:16,padding:'12px 10px 8px'}}>
+      <div style={{fontSize:10,fontWeight:700,letterSpacing:'0.12em',color:'#4a637e',textTransform:'uppercase',marginBottom:6,paddingLeft:4}}>
+        Energy Flow
+      </div>
 
-      <svg
-        viewBox={`0 0 ${VB} ${VB}`}
-        className="w-full max-w-sm sm:max-w-md mx-auto block"
-        style={{ height: 'auto' }}
-      >
+      <svg viewBox={`0 0 ${W} ${H}`} style={{width:'100%',height:'auto',display:'block',maxHeight:340}}>
         <defs>
-          {/* Glow filter for dots */}
-          <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="4" result="blur" />
-            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          <filter id="glow4" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="4.5" result="b"/>
+            <feComposite in="SourceGraphic" in2="b" operator="over"/>
           </filter>
-          {/* Soft glow for nodes */}
-          <filter id="node-glow" x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation="6" result="blur" />
-            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          <filter id="glow8" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="9" result="b"/>
+            <feComposite in="SourceGraphic" in2="b" operator="over"/>
           </filter>
-          {/* Gradient for paths */}
-          {(Object.entries(COLORS) as [ArmKey, string][]).map(([arm, color]) => (
-            <linearGradient key={arm} id={`grad-${arm}`} gradientUnits="userSpaceOnUse"
-              x1={arm === 'grid' ? POS.grid.x  : arm === 'home' ? POS.home.x  : CX}
-              y1={arm === 'solar'? POS.solar.y  : arm === 'bat'  ? POS.battery.y: CY}
-              x2={CX} y2={CY}>
-              <stop offset="0%"   stopColor={color} stopOpacity="0.5" />
-              <stop offset="100%" stopColor={color} stopOpacity="0.1" />
-            </linearGradient>
-          ))}
         </defs>
 
-        {/* ── Path lines ─────────────────────────────────────── */}
-        {(Object.entries(PATHS) as [ArmKey, string][]).map(([arm, d]) => (
-          <path key={arm} d={d}
-            ref={el => { pathRefs.current[arm] = el }}
-            stroke={`url(#grad-${arm})`}
-            strokeWidth="3.5"
-            fill="none"
-            strokeLinecap="round"
-          />
-        ))}
+        {/* ── Animated "marching dash" paths ─────────────────────────── */}
+        {(Object.keys(PATHS) as ArmKey[]).map(k => {
+          const a = cfg[k]
+          return (
+            <g key={k}>
+              {/* dim background track */}
+              <path d={PATHS[k]} fill="none" stroke={a.on ? `${a.color}20` : '#18283d'}
+                strokeWidth={a.on?3.5:2} strokeLinecap="round"
+                strokeDasharray={a.on?'none':'5 8'}/>
+              {/* animated dashes */}
+              {a.on && (
+                <path d={PATHS[k]} fill="none" stroke={a.color}
+                  strokeWidth="3.5" strokeLinecap="round"
+                  strokeDasharray="10 18" strokeDashoffset="0"
+                  filter="url(#glow4)">
+                  <animate ref={el => { animRefs.current[k] = el as SVGAnimateElement | null }}
+                    attributeName="stroke-dashoffset"
+                    from="0" to="-28"
+                    dur={`${period(a.power)}s`}
+                    repeatCount="indefinite"
+                    calcMode="linear"/>
+                </path>
+              )}
+            </g>
+          )
+        })}
 
-        {/* ── Animated dot elements (pre-allocated) ─────────── */}
-        {Array.from({ length: MAX_DOTS * 4 }, (_, i) => (
-          <circle key={`dot-${i}`}
-            ref={el => { dotEls.current[i] = el }}
-            r="6"
-            fill={specsRef.current[i]?.color ?? '#fff'}
-            filter="url(#glow)"
-            style={{ opacity: 0, transition: 'none' }}
-          >
-            {/* inner bright core */}
-          </circle>
-        ))}
+        {/* ── Hub ──────────────────────────────────────────────────────── */}
+        <circle cx={CX} cy={CY} r={10} fill="#0c1830" stroke="#243555" strokeWidth="1.5"/>
+        <circle cx={CX} cy={CY} r={5}  fill="#1c3050"/>
 
-        {/* ─────── HUB ──────────────────────────────────────── */}
-        <circle cx={CX} cy={CY} r={HR + 4}
-          fill="#0d1829" stroke="#1e2f4a" strokeWidth="1.5" />
-        <circle cx={CX} cy={CY} r={HR - 2}
-          fill="#243350" />
+        {/* ═══ SOLAR ════════════════════════════════════════════════════ */}
+        {pvOn && <circle cx={NODE.solar.x} cy={NODE.solar.y} r={NR+8}
+          fill={`${COL.solar}08`} stroke={`${COL.solar}25`} strokeWidth="1" filter="url(#glow8)"/>}
+        <circle cx={NODE.solar.x} cy={NODE.solar.y} r={NR}
+          fill={nodeFill(pvOn,COL.solar)} stroke={nodeStroke(pvOn,COL.solar)} strokeWidth="2.5"/>
+        <g transform={`translate(${NODE.solar.x},${NODE.solar.y - 10})`}>
+          {ICON.sun(pvOn ? COL.solar : '#2a3f58')}
+        </g>
+        <text x={NODE.solar.x} y={NODE.solar.y+16} textAnchor="middle"
+          fontSize="13" fontWeight="800" fill={pvOn?'#f0f6ff':'#3a5068'}>{fmt(ppv)}</text>
+        <text x={NODE.solar.x} y={NODE.solar.y+NR+16} textAnchor="middle"
+          fontSize="11" fill="#506a85">Solar</text>
+        {pvOn && <text x={NODE.solar.x} y={NODE.solar.y-NR-8} textAnchor="middle"
+          fontSize="10" fill={COL.solar} opacity="0.8">Generating</text>}
 
-        {/* ─────── SOLAR node ───────────────────────────────── */}
-        <circle cx={POS.solar.x} cy={POS.solar.y} r={NR + 4}
-          fill={pvOn ? '#f0a82008' : 'transparent'}
-          stroke={pvOn ? '#f0a820' : '#1e2f4a'}
-          strokeWidth="1.5"
-          filter={pvOn ? 'url(#node-glow)' : undefined}
-        />
-        <circle cx={POS.solar.x} cy={POS.solar.y} r={NR}
-          fill={pvOn ? '#f0a82014' : '#0d1829'}
-          stroke={pvOn ? '#f0a82060' : '#1e2f4a'}
-          strokeWidth="1.5"
-        />
-        <text x={POS.solar.x} y={POS.solar.y - 10}
-          textAnchor="middle" dominantBaseline="middle"
-          fontSize="22" fill={pvOn ? '#f0a820' : '#2a3f5e'}>☀</text>
-        <text x={POS.solar.x} y={POS.solar.y + 13}
-          textAnchor="middle" fontSize="11" fontWeight="700"
-          fill={pvOn ? '#e4eaf5' : '#3f5572'}>{fmtW(ppv)}</text>
-        <text x={POS.solar.x} y={POS.solar.y + NR + 18}
-          textAnchor="middle" fontSize="11" fill="#6a82a0">Solar</text>
-
-        {/* ─────── GRID node ────────────────────────────────── */}
-        <circle cx={POS.grid.x} cy={POS.grid.y} r={NR}
-          fill={gridImp ? '#d44c4414' : gridExp ? '#00a87414' : '#0d1829'}
-          stroke={gridImp ? '#d44c4460' : gridExp ? '#00a87460' : '#1e2f4a'}
-          strokeWidth="1.5"
-        />
-        <text x={POS.grid.x} y={POS.grid.y - 10}
-          textAnchor="middle" fontSize="22"
-          fill={gridImp ? '#e06058' : gridExp ? '#00c49a' : '#2a3f5e'}>⚡</text>
-        <text x={POS.grid.x} y={POS.grid.y + 13}
-          textAnchor="middle" fontSize="11" fontWeight="700"
-          fill={gridImp || gridExp ? '#e4eaf5' : '#3f5572'}>{fmtW(pgrid)}</text>
-        <text x={POS.grid.x} y={POS.grid.y - NR - 10}
-          textAnchor="middle" fontSize="11" fill="#6a82a0">Grid</text>
-        <text x={POS.grid.x} y={POS.grid.y + NR + 18}
-          textAnchor="middle" fontSize="10"
-          fill={gridImp ? '#e06058' : gridExp ? '#00c49a' : '#2a3f5e'}>
-          {gridImp ? '↓ Import' : gridExp ? '↑ Export' : 'Idle'}
+        {/* ═══ GRID ═════════════════════════════════════════════════════ */}
+        {(gImp||gExp) && <circle cx={NODE.grid.x} cy={NODE.grid.y} r={NR+8}
+          fill={`${cfg.grid.color}08`} stroke={`${cfg.grid.color}25`} strokeWidth="1" filter="url(#glow8)"/>}
+        <circle cx={NODE.grid.x} cy={NODE.grid.y} r={NR}
+          fill={nodeFill(gImp||gExp,cfg.grid.color)} stroke={nodeStroke(gImp||gExp,cfg.grid.color)} strokeWidth="2.5"/>
+        <g transform={`translate(${NODE.grid.x},${NODE.grid.y - 6})`}>
+          {ICON.bolt(gImp?COL.grid_imp:gExp?COL.grid_exp:'#2a3f58')}
+        </g>
+        <text x={NODE.grid.x} y={NODE.grid.y+20} textAnchor="middle"
+          fontSize="13" fontWeight="800" fill={(gImp||gExp)?'#f0f6ff':'#3a5068'}>{fmt(pgrid)}</text>
+        <text x={NODE.grid.x} y={NODE.grid.y-NR-10} textAnchor="middle"
+          fontSize="11" fill="#506a85">Grid</text>
+        <text x={NODE.grid.x} y={NODE.grid.y+NR+16} textAnchor="middle"
+          fontSize="10" fill={gImp?COL.grid_imp:gExp?COL.grid_exp:'#3a5068'}>
+          {gImp?'↓ Import':gExp?'↑ Export':'Idle'}
         </text>
 
-        {/* ─────── HOME node ────────────────────────────────── */}
-        <circle cx={POS.home.x} cy={POS.home.y} r={NR}
-          fill="#5590e014" stroke="#5590e060" strokeWidth="1.5" />
-        <text x={POS.home.x} y={POS.home.y - 10}
-          textAnchor="middle" fontSize="22" fill="#7aaeed">⌂</text>
-        <text x={POS.home.x} y={POS.home.y + 13}
-          textAnchor="middle" fontSize="11" fontWeight="700"
-          fill="#e4eaf5">{fmtW(pload)}</text>
-        <text x={POS.home.x} y={POS.home.y - NR - 10}
-          textAnchor="middle" fontSize="11" fill="#6a82a0">Home</text>
+        {/* ═══ HOME ═════════════════════════════════════════════════════ */}
+        {hOn && <circle cx={NODE.home.x} cy={NODE.home.y} r={NR+8}
+          fill={`${COL.home}08`} stroke={`${COL.home}25`} strokeWidth="1" filter="url(#glow8)"/>}
+        <circle cx={NODE.home.x} cy={NODE.home.y} r={NR}
+          fill={nodeFill(hOn,COL.home)} stroke={nodeStroke(hOn,COL.home)} strokeWidth="2.5"/>
+        <g transform={`translate(${NODE.home.x},${NODE.home.y - 6})`}>
+          {ICON.home(hOn?COL.home:'#2a3f58')}
+        </g>
+        <text x={NODE.home.x} y={NODE.home.y+20} textAnchor="middle"
+          fontSize="13" fontWeight="800" fill={hOn?'#f0f6ff':'#3a5068'}>{fmt(pload)}</text>
+        <text x={NODE.home.x} y={NODE.home.y-NR-10} textAnchor="middle"
+          fontSize="11" fill="#506a85">Home</text>
 
-        {/* ─────── BATTERY node ─────────────────────────────── */}
-        <circle cx={POS.battery.x} cy={POS.battery.y} r={NR}
-          fill={batChg ? '#00c49a14' : batDis ? '#e0881c14' : '#0d1829'}
-          stroke={batChg ? '#00c49a60' : batDis ? '#e0881c60' : '#1e2f4a'}
-          strokeWidth="1.5"
-        />
-        {/* SoC arc */}
-        {soc > 1 && (
-          <path d={socArc} fill="none" stroke={socColor}
-            strokeWidth="3.5" strokeLinecap="round" />
-        )}
-        <text x={POS.battery.x} y={POS.battery.y + 7}
-          textAnchor="middle" fontSize="13" fontWeight="800"
-          fill={socColor}>{soc}%</text>
-        <text x={POS.battery.x} y={POS.battery.y + NR + 18}
-          textAnchor="middle" fontSize="11" fill="#6a82a0">Battery</text>
-        {(batChg || batDis) && (
-          <text x={POS.battery.x} y={POS.battery.y - NR - 10}
-            textAnchor="middle" fontSize="10"
-            fill={batChg ? '#00c49a' : '#e0881c'}>
-            {batChg ? `↑ ${fmtW(pbattery)}` : `↓ ${fmtW(pbattery)}`}
-          </text>
-        )}
-
-        {/* ─────── Re-paint dots with correct colour ────────── */}
-        {/* Dots are pre-rendered above; we refresh their fill each render */}
-        {specsRef.current.map((spec, i) => {
-          const el = dotEls.current[i]
-          if (el) el.setAttribute('fill', spec.color)
-          return null
-        })}
+        {/* ═══ BATTERY ══════════════════════════════════════════════════ */}
+        {(bChg||bDis) && <circle cx={NODE.bat.x} cy={NODE.bat.y} r={NR+8}
+          fill={`${cfg.bat.color}08`} stroke={`${cfg.bat.color}25`} strokeWidth="1" filter="url(#glow8)"/>}
+        <circle cx={NODE.bat.x} cy={NODE.bat.y} r={NR}
+          fill={nodeFill(bChg||bDis,cfg.bat.color)} stroke={nodeStroke(bChg||bDis,cfg.bat.color)} strokeWidth="2.5"/>
+        {soc > 1 && <path d={socArc} fill="none" stroke={socCol} strokeWidth="4.5" strokeLinecap="round"/>}
+        <text x={NODE.bat.x} y={NODE.bat.y+8} textAnchor="middle"
+          fontSize="16" fontWeight="900" fill={socCol}>{soc}%</text>
+        <text x={NODE.bat.x} y={NODE.bat.y+NR+16} textAnchor="middle"
+          fontSize="11" fill="#506a85">Battery</text>
+        {(bChg||bDis) && <text x={NODE.bat.x} y={NODE.bat.y-NR-8} textAnchor="middle"
+          fontSize="10" fill={cfg.bat.color}>
+          {bChg?`↑ ${fmt(pbattery)}`:`↓ ${fmt(pbattery)}`}
+        </text>}
       </svg>
     </div>
   )

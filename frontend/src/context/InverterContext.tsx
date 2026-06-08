@@ -50,6 +50,7 @@ interface InverterContextValue {
   settings: Record<string, unknown>
   loadSettings: () => void
   writeSetting: (key: string, value: unknown) => Promise<void>
+  platform: string   // 'ES' | 'ET' | 'XS' | '' — populated after first connection
 }
 
 export const InverterContext = createContext<InverterContextValue | null>(null)
@@ -60,6 +61,7 @@ export function InverterProvider({ children, token, onAuthFail }: { children: Re
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
   const [settings, setSettings] = useState<Record<string, unknown>>({})
+  const [platform, setPlatform] = useState<string>('')
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -77,7 +79,16 @@ export function InverterProvider({ children, token, onAuthFail }: { children: Re
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
 
-    ws.onopen = () => setStatus('connected')
+
+
+    ws.onopen = async () => {
+      setStatus('connected')
+      // Fetch platform info once on connect
+      try {
+        const r = await fetch('/api/status', { headers: { Authorization: `Bearer ${token}` } })
+        if (r.ok) { const j = await r.json(); if (j.platform) setPlatform(j.platform) }
+      } catch { /* ignore */ }
+    }
 
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data)
@@ -127,7 +138,7 @@ export function InverterProvider({ children, token, onAuthFail }: { children: Re
   }
 
   return (
-    <InverterContext.Provider value={{ data, history, status, lastUpdate, settings, loadSettings, writeSetting }}>
+    <InverterContext.Provider value={{ data, history, status, lastUpdate, settings: { ...settings, platform }, loadSettings, writeSetting, platform }}>
       {children}
     </InverterContext.Provider>
   )

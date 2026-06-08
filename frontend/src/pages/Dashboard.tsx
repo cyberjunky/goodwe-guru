@@ -1,139 +1,268 @@
 import { useInverter } from '../context/InverterContext'
 import EnergyFlow from '../components/EnergyFlow'
-import StatCard from '../components/StatCard'
-import { Sun, Zap, Battery, Home, Thermometer, Clock } from 'lucide-react'
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts'
+import { Sun, Battery, Zap, Home, Activity, Clock, Thermometer, Waves } from 'lucide-react'
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
-const LINES = [
-  { key: 'Solar',   color: '#f59e0b' },
-  { key: 'Grid',    color: '#ef4444' },
-  { key: 'Battery', color: '#22c55e' },
-  { key: 'Load',    color: '#60a5fa' },
-]
+// ── Colour tokens ─────────────────────────────────────────────────────────────
+const T = {
+  solar:   '#e8a030',
+  batChg:  '#22a875',
+  batDis:  '#d07830',
+  imp:     '#c85050',
+  exp:     '#1a9870',
+  load:    '#5070c0',
+  neutral: '#8ca3c0',
+  bg:      '#09101e',
+  card:    '#0c1525',
+  cardB:   '#101b2e',
+  border:  '#18283d',
+  borderHi:'#22334e',
+  text:    '#c8ddf0',
+  muted:   '#5a7898',
+  dim:     '#2e4560',
+}
 
-type TooltipEntry = { name?: string; value?: number; color?: string }
-function ChartTooltip({ active, payload }: { active?: boolean; payload?: TooltipEntry[] }) {
+// ── Metric card ───────────────────────────────────────────────────────────────
+interface MetricProps {
+  label:  string
+  value:  string
+  unit:   string
+  sub?:   string
+  color:  string
+  icon:   React.ReactNode
+  badge?: { text: string; color: string }
+}
+function MetricCard({ label, value, unit, sub, color, icon, badge }: MetricProps) {
+  return (
+    <div style={{
+      background: T.card,
+      border: `1px solid ${T.border}`,
+      borderLeft: `3px solid ${color}`,
+      borderRadius: 10,
+      padding: '14px 16px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4,
+      position: 'relative',
+    }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <span style={{ fontSize:10, fontWeight:700, letterSpacing:'0.12em', textTransform:'uppercase', color: T.muted }}>
+          {label}
+        </span>
+        <span style={{ color: T.dim }}>{icon}</span>
+      </div>
+      <div style={{ display:'flex', alignItems:'baseline', gap:4 }}>
+        <span style={{ fontSize:26, fontWeight:800, lineHeight:1.1, color, fontVariantNumeric:'tabular-nums', letterSpacing:'-0.02em' }}>
+          {value}
+        </span>
+        <span style={{ fontSize:12, color: T.muted, fontWeight:500 }}>{unit}</span>
+      </div>
+      {sub && <div style={{ fontSize:11, color: T.muted, lineHeight:1.3 }}>{sub}</div>}
+      {badge && (
+        <div style={{
+          position:'absolute', top:12, right:14,
+          fontSize:10, fontWeight:700, color: badge.color,
+          background: badge.color + '18',
+          border: `1px solid ${badge.color}35`,
+          borderRadius:5, padding:'2px 7px',
+        }}>{badge.text}</div>
+      )}
+    </div>
+  )
+}
+
+// ── Info row ──────────────────────────────────────────────────────────────────
+function Row({ label, value, unit, color=T.neutral }:
+  { label:string; value:string|number; unit?:string; color?:string }) {
+  return (
+    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center',
+      padding:'6px 0', borderBottom:`1px solid ${T.border}` }}>
+      <span style={{ fontSize:11, color: T.muted }}>{label}</span>
+      <span style={{ fontSize:12, fontWeight:600, color, fontVariantNumeric:'tabular-nums' }}>
+        {value}{unit && <span style={{ fontSize:10, color: T.muted, marginLeft:2 }}>{unit}</span>}
+      </span>
+    </div>
+  )
+}
+
+// ── Section header ────────────────────────────────────────────────────────────
+function SectionHead({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize:10, fontWeight:700, letterSpacing:'0.12em', textTransform:'uppercase',
+      color: T.muted, marginBottom:8, paddingBottom:6, borderBottom:`1px solid ${T.border}` }}>
+      {children}
+    </div>
+  )
+}
+
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+type TE = { name?:string; value?:number; color?:string }
+function Tip({ active, payload }: { active?:boolean; payload?:TE[] }) {
   if (!active || !payload?.length) return null
   return (
-    <div className="bg-gray-800 border border-gray-700 rounded-lg p-2 text-xs space-y-1">
-      {payload.map((p, i) => (
-        <div key={i} style={{ color: p.color }}>{p.name}: {p.value?.toFixed(2)} kW</div>
+    <div style={{ background:'#0c1525', border:`1px solid ${T.border}`, borderRadius:8, padding:'8px 11px', fontSize:11 }}>
+      {payload.map((p,i)=>(
+        <div key={i} style={{ color:p.color, marginBottom:1 }}>
+          {p.name} <strong style={{ color:T.text }}>{p.value?.toFixed(2)} kW</strong>
+        </div>
       ))}
     </div>
   )
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const { data, history, status } = useInverter()
 
   if (!data) return (
-    <div className="p-6 flex items-center justify-center h-full">
-      <div className="text-center text-gray-500">
-        <div className="text-lg mb-2">
-          {status === 'connecting' ? 'Connecting to inverter…' : 'No data yet'}
-        </div>
-        <div className="text-sm">Make sure the backend is running and the inverter IP is configured.</div>
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'center',
+      height:'100%', flexDirection:'column', gap:8, color:T.muted }}>
+      <div style={{ fontSize:15 }}>
+        {status==='connecting'?'Connecting to inverter…':'Waiting for data…'}
+      </div>
+      <div style={{ fontSize:12, color:T.dim }}>
+        Ensure the backend is running and the inverter is reachable.
       </div>
     </div>
   )
 
-  const chartData = history.slice(-60).map((h, i) => ({
-    t: i,
-    Solar:   +(h.ppv / 1000).toFixed(2),
-    Grid:    +(h.pgrid / 1000).toFixed(2),
-    Battery: +(h.pbattery / 1000).toFixed(2),
-    Load:    +(h.load / 1000).toFixed(2),
+  const ppv   = (data.ppv       as number) ?? 0
+  const pgrid = (data.pgrid     as number) ?? 0
+  const pbat  = (data.pbattery1 as number) ?? 0
+  const pload = (data.load_ptotal as number) ?? 0
+  const soc   = (data.battery_soc as number) ?? 0
+  const eDay  = (data.e_day     as number) ?? 0
+  const eDayImp = (data.e_day_imp as number) ?? 0
+  const eDayExp = (data.e_day_exp as number) ?? 0
+
+  const gImp = pgrid  >  30
+  const gExp = pgrid  < -30
+  const bChg = pbat   >  30
+  const bDis = pbat   < -30
+
+  const chartData = history.slice(-90).map((h, i) => ({
+    i, Solar:+(h.ppv/1000).toFixed(3), Battery:+(h.pbattery/1000).toFixed(3),
+    Grid:+(h.pgrid/1000).toFixed(3), Load:+(h.load/1000).toFixed(3),
   }))
 
-  const gridImport = (data.pgrid as number ?? 0) > 0
-  const gridExport = (data.pgrid as number ?? 0) < 0
-  const batCharging = (data.pbattery1 as number ?? 0) > 0
-  const batDischarging = (data.pbattery1 as number ?? 0) < 0
-
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div style={{ padding:'18px 20px', display:'flex', flexDirection:'column', gap:12, maxWidth:1400, boxSizing:'border-box' }}>
+
+      {/* ── Header ─────────────────────────────────────────────────── */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
         <div>
-          <h1 className="text-xl font-semibold text-white">Dashboard</h1>
-          <p className="text-sm text-gray-500 mt-0.5">{String(data.work_mode_label ?? '—')} · {String(data.safety_country_label ?? '—')}</p>
+          <h1 style={{ margin:0, fontSize:18, fontWeight:700, color:T.text, letterSpacing:'-0.01em' }}>
+            Dashboard
+          </h1>
+          <div style={{ fontSize:11, color:T.muted, marginTop:2 }}>
+            {String(data.work_mode_label??'—')} · {String(data.safety_country_label??'—')}
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-xs bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-400">
-          <Clock size={13} />
-          Today: {(data.e_day as number)?.toFixed(2) ?? '—'} kWh
+        <div style={{ display:'flex', alignItems:'center', gap:6,
+          background:T.card, border:`1px solid ${T.border}`, borderRadius:8,
+          padding:'6px 12px', fontSize:11, color:T.muted }}>
+          <Clock size={12} color={T.muted}/>
+          Today:&nbsp;<strong style={{ color:T.solar }}>{eDay.toFixed(2)} kWh</strong>
         </div>
       </div>
 
-      {/* Quick stats row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard
-          label="Solar" value={((data.ppv as number) / 1000).toFixed(2)} unit="kW"
-          sub={`${(data.e_day as number)?.toFixed(1)} kWh today`}
-          color="text-amber-400" icon={<Sun size={16} />}
-        />
-        <StatCard
-          label="Battery" value={data.battery_soc ?? '—'} unit="%"
-          sub={batCharging ? `↑ ${((data.pbattery1 as number ?? 0) / 1000).toFixed(2)} kW charging`
-            : batDischarging ? `↓ ${(Math.abs(data.pbattery1 as number ?? 0) / 1000).toFixed(2)} kW discharging`
-            : 'Idle'}
-          color={batCharging ? 'text-emerald-400' : batDischarging ? 'text-orange-400' : 'text-gray-400'}
-          icon={<Battery size={16} />}
-        />
-        <StatCard
-          label="Grid" value={(Math.abs(data.pgrid as number ?? 0) / 1000).toFixed(2)} unit="kW"
-          sub={gridImport ? `↓ Importing · ${(data.e_day_imp as number)?.toFixed(1)} kWh today`
-            : gridExport ? `↑ Exporting · ${(data.e_day_exp as number)?.toFixed(1)} kWh today`
-            : 'Idle'}
-          color={gridImport ? 'text-red-400' : gridExport ? 'text-emerald-400' : 'text-gray-400'}
-          icon={<Zap size={16} />}
-        />
-        <StatCard
-          label="Load" value={((data.load_ptotal as number ?? 0) / 1000).toFixed(2)} unit="kW"
-          sub={`${(data.e_load_day as number)?.toFixed(1) ?? '—'} kWh today`}
-          color="text-blue-400" icon={<Home size={16} />}
-        />
+      {/* ── 4 metric cards ─────────────────────────────────────────── */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10 }}>
+        <MetricCard
+          label="Solar" value={(ppv/1000).toFixed(2)} unit="kW"
+          sub={`${eDay.toFixed(2)} kWh today`} color={T.solar} icon={<Sun size={15}/>}
+          badge={ppv > 50 ? { text:'Active', color:T.solar } : undefined}/>
+        <MetricCard
+          label="Battery" value={String(soc)} unit="%"
+          sub={bChg?`Charging · ${(pbat/1000).toFixed(2)} kW`
+              :bDis?`Discharging · ${(Math.abs(pbat)/1000).toFixed(2)} kW`:'Standby'}
+          color={bChg?T.batChg:bDis?T.batDis:T.neutral}
+          icon={<Battery size={15}/>}/>
+        <MetricCard
+          label="Grid" value={(Math.abs(pgrid)/1000).toFixed(2)} unit="kW"
+          sub={gImp?`Importing · ${eDayImp.toFixed(2)} kWh today`
+              :gExp?`Exporting · ${eDayExp.toFixed(2)} kWh today`:'Idle'}
+          color={gImp?T.imp:gExp?T.exp:T.neutral}
+          icon={<Zap size={15}/>}
+          badge={gExp?{text:'↑ Export',color:T.exp}:undefined}/>
+        <MetricCard
+          label="Home load" value={(pload/1000).toFixed(2)} unit="kW"
+          sub={`${(data.e_load_day as number ?? 0).toFixed(2)} kWh today`}
+          color={T.load} icon={<Home size={15}/>}/>
       </div>
 
-      {/* Energy flow + chart */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <EnergyFlow
-          ppv={data.ppv as number ?? 0}
-          pbattery={data.pbattery1 as number ?? 0}
-          pgrid={data.pgrid as number ?? 0}
-          pload={data.load_ptotal as number ?? 0}
-          soc={data.battery_soc as number ?? 0}
-        />
+      {/* ── Main row: flow + panels ─────────────────────────────────── */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
 
-        {/* Live chart */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-4">Live Power (kW)</h2>
-          {chartData.length > 1 ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={chartData}>
-                <XAxis dataKey="t" hide />
-                <YAxis tickFormatter={v => `${v}kW`} tick={{ fontSize: 11, fill: '#6b7280' }} width={45} />
-                <Tooltip content={<ChartTooltip />} />
-                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12 }} />
-                {LINES.map(({ key, color }) => (
-                  <Line key={key} type="monotone" dataKey={key} stroke={color} dot={false} strokeWidth={2} isAnimationActive={false} />
+        {/* Energy flow */}
+        <EnergyFlow ppv={ppv} pbattery={pbat} pgrid={pgrid} pload={pload} soc={soc}/>
+
+        {/* Right panel: inverter stats + totals */}
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+
+          <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px', flex:1 }}>
+            <SectionHead><Thermometer size={10} style={{display:'inline',marginRight:4}}/>Inverter Status</SectionHead>
+            <Row label="Inverter temp"   value={(data.temperature as number??0).toFixed(1)}        unit="°C"
+              color={(data.temperature as number??0)>60?T.imp:T.text}/>
+            <Row label="Battery temp"    value={(data.battery_temperature as number??0).toFixed(1)} unit="°C"
+              color={(data.battery_temperature as number??0)>45?T.imp:T.text}/>
+            <Row label="Grid voltage"    value={(data.vgrid as number??0).toFixed(0)}               unit="V"/>
+            <Row label="Grid frequency"  value={(data.fgrid as number??0).toFixed(2)}               unit="Hz"/>
+            <Row label="Battery voltage" value={(data.vbattery1 as number??0).toFixed(1)}           unit="V"/>
+            <Row label="Battery SoH"     value={data.battery_soh as number??'—'}                    unit="%"
+              color={(data.battery_soh as number??100)>80?T.batChg:T.batDis}/>
+            <Row label="Run hours"       value={(data.h_total as number??0).toLocaleString()}        unit="h"/>
+          </div>
+
+          <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px' }}>
+            <SectionHead><Waves size={10} style={{display:'inline',marginRight:4}}/>All-time Totals</SectionHead>
+            <Row label="Total solar yield" value={((data.e_total    as number??0)/1000).toFixed(1)} unit="MWh" color={T.solar}/>
+            <Row label="Total exported"    value={((data.e_total_exp as number??0)/1000).toFixed(1)} unit="MWh" color={T.exp}/>
+            <Row label="Total imported"    value={((data.e_total_imp as number??0)/1000).toFixed(1)} unit="MWh" color={T.imp}/>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Live chart ─────────────────────────────────────────────── */}
+      <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px 10px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:5, fontSize:10, fontWeight:700,
+            letterSpacing:'0.12em', textTransform:'uppercase', color:T.muted }}>
+            <Activity size={11} color={T.muted}/> Live Power
+          </div>
+          <div style={{ display:'flex', gap:12, fontSize:10 }}>
+            {([['Solar',T.solar],['Battery',T.batChg],['Grid',T.imp],['Load',T.load]] as [string,string][])
+              .map(([n,c])=> <span key={n} style={{color:c}}>● {n}</span>)}
+          </div>
+        </div>
+        {chartData.length > 3 ? (
+          <ResponsiveContainer width="100%" height={150}>
+            <AreaChart data={chartData} margin={{top:2,right:0,bottom:0,left:0}}>
+              <defs>
+                {([['Solar',T.solar],['Battery',T.batChg],['Grid',T.imp],['Load',T.load]] as [string,string][])
+                  .map(([n,c])=>(
+                  <linearGradient key={n} id={`dg-${n}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%"  stopColor={c} stopOpacity={0.2}/>
+                    <stop offset="95%" stopColor={c} stopOpacity={0}/>
+                  </linearGradient>
                 ))}
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="h-[220px] flex items-center justify-center text-gray-600 text-sm">Accumulating data…</div>
-          )}
-        </div>
+              </defs>
+              <XAxis dataKey="i" hide/>
+              <YAxis tick={{fontSize:10,fill:T.muted}} tickFormatter={v=>`${v}k`} width={32}/>
+              <Tooltip content={<Tip/>}/>
+              {([['Solar',T.solar],['Battery',T.batChg],['Grid',T.imp],['Load',T.load]] as [string,string][])
+                .map(([n,c])=>(
+                <Area key={n} type="monotone" dataKey={n} stroke={c} fill={`url(#dg-${n})`}
+                  strokeWidth={1.5} dot={false} isAnimationActive={false}/>
+              ))}
+            </AreaChart>
+          </ResponsiveContainer>
+        ) : (
+          <div style={{height:150,display:'flex',alignItems:'center',justifyContent:'center',
+            fontSize:12,color:T.dim}}>Accumulating live data…</div>
+        )}
       </div>
 
-      {/* Bottom stats */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <StatCard label="Inverter Temp" value={(data.temperature as number)?.toFixed(1) ?? '—'} unit="°C" icon={<Thermometer size={14} />} />
-        <StatCard label="Battery Temp" value={(data.battery_temperature as number)?.toFixed(1) ?? '—'} unit="°C" icon={<Thermometer size={14} />} />
-        <StatCard label="Grid Freq" value={(data.fgrid as number)?.toFixed(2) ?? '—'} unit="Hz" />
-        <StatCard label="Grid Voltage" value={(data.vgrid as number)?.toFixed(0) ?? '—'} unit="V" />
-        <StatCard label="Total Yield" value={(data.e_total as number) ? ((data.e_total as number) / 1000).toFixed(1) : '—'} unit="MWh" />
-        <StatCard label="Run Hours" value={(data.h_total as number)?.toLocaleString() ?? '—'} unit="h" />
-      </div>
     </div>
   )
 }

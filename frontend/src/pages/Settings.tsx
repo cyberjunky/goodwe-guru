@@ -457,9 +457,11 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* EMS Mode (shows when relevant) */}
+      {/* EMS Mode — ET/EH/BH/BT platform (745) only — hidden for ES/EM/BP */}
+      {(settings.platform as string) !== 'ES' && (
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-4">EMS Mode</h2>
+        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-1">EMS Mode</h2>
+        <p className="text-xs text-gray-600 mb-4">ET / EH / BH platform only. Controls smart energy management behaviour.</p>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
           {EMS_MODES.map(m => (
             <button key={m.value} onClick={() => set('ems_mode', m.value)}
@@ -470,6 +472,7 @@ export default function Settings() {
           ))}
         </div>
       </div>
+      )}
 
       {/* Export & Power control */}
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
