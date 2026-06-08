@@ -9,11 +9,13 @@ frontend/node_modules/
 frontend/dist/
 
 # ── Root-level dev tooling (not needed in repo) ───────────────────────────────
+# NOTE: anchor these to the repo root with a leading slash, otherwise they also
+# ignore frontend/package.json — which broke every install (no manifest to build).
 node_modules/
 take-screenshots.js
 spa-server.js
-package.json
-package-lock.json
+/package.json
+/package-lock.json
 
 # ── Python ────────────────────────────────────────────────────────────────────
 backend/__pycache__/
