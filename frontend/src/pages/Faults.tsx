@@ -112,13 +112,17 @@ export default function Faults() {
         <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-4">Temperature Monitoring</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { label: 'Radiator', value: data?.temperature },
+            { label: 'Inverter', value: data?.temperature },
             { label: 'Air Inlet', value: data?.temperature_air },
             { label: 'Module', value: data?.temperature_module },
             { label: 'Battery', value: data?.battery_temperature },
             { label: 'Max Cell', value: data?.battery_max_cell_temp },
             { label: 'Min Cell', value: data?.battery_min_cell_temp },
-          ].map(t => {
+          ]
+          // Only show sensors the inverter actually reports (ES omits air/module
+          // temps; cell temps need the BMS bridge) — avoids rows of "—".
+          .filter(t => typeof t.value === 'number' && !isNaN(t.value as number))
+          .map(t => {
             const v = t.value as number
             const warn = v !== undefined && v > 55
             return (
