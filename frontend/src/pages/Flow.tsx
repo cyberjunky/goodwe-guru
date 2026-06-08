@@ -104,12 +104,11 @@ export default function Flow() {
   )
 
   return (
-    <div className="p-4 sm:p-6 space-y-5">
+    <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <Workflow className="text-gray-400" size={22} />
-          <h1 className="text-xl font-semibold text-white">Energy Flow</h1>
+        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-gray-500">
+          <Workflow size={12} /> Daily Energy Flow
         </div>
         <div className="flex items-center gap-1 rounded-lg" style={{ background: '#0c1525', border: '1px solid #18283d' }}>
           <button onClick={() => setDate(shiftDate(date, -1))} className="p-2 text-gray-400 hover:text-white"><ChevronLeft size={16} /></button>

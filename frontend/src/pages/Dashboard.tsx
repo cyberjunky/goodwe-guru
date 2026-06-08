@@ -1,5 +1,6 @@
 import { useInverter } from '../context/InverterContext'
 import EnergyFlow from '../components/EnergyFlow'
+import Flow from './Flow'
 import { fmtEnergy } from '../lib/format'
 import { Sun, Battery, Zap, Home, Activity, Clock, Thermometer, Waves } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
@@ -262,6 +263,11 @@ export default function Dashboard() {
           <div style={{height:150,display:'flex',alignItems:'center',justifyContent:'center',
             fontSize:12,color:T.dim}}>Accumulating live data…</div>
         )}
+      </div>
+
+      {/* ── Daily energy flow (Sankey) ─────────────────────────────── */}
+      <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px' }}>
+        <Flow />
       </div>
 
     </div>
