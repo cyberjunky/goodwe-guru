@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash -n /c/Users/ronkl/Development/goodwe-guru/install.sh)",
+      "Bash(git add *)",
+      "Bash(git push *)"
+    ]
+  }
+}

@@ -49,9 +49,16 @@ echo ""
 read -rp "  GoodWe inverter IP address         : " INVERTER_HOST
 [[ -z "$INVERTER_HOST" ]] && error "Inverter IP is required"
 
-read -rp "  Dashboard password                  : " -s APP_PASSWORD; echo
-[[ -z "$APP_PASSWORD" ]] && error "Password cannot be empty"
-[[ ${#APP_PASSWORD} -lt 8 ]] && { warn "Password is short (< 8 chars) — consider a stronger one"; }
+read -rp "  Dashboard password (blank = auto-gen): " -s APP_PASSWORD; echo
+if [[ -z "$APP_PASSWORD" ]]; then
+  APP_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(16))" 2>/dev/null \
+                 || openssl rand -base64 18 | tr -d '/+=')
+  PASSWORD_GENERATED=true
+  ok "Auto-generated dashboard password — shown in the summary below"
+else
+  PASSWORD_GENERATED=false
+  [[ ${#APP_PASSWORD} -lt 8 ]] && { warn "Password is short (< 8 chars) — consider a stronger one"; }
+fi
 
 read -rp "  Poll interval in seconds [10]       : " POLL_INTERVAL
 POLL_INTERVAL=${POLL_INTERVAL:-10}
@@ -70,13 +77,25 @@ if $ON_PROXMOX; then
   info "Proxmox host detected — creating LXC container …"
 
   VMID=$(pvesh get /cluster/nextid)
+
+  # ── Container rootfs storage (block storage is fine here) ───────────────
   # Prefer local-zfs, then local-lvm, then local
   for store in local-zfs local-lvm local; do
-    if pvesm status | grep -q "^$store "; then STORAGE=$store; break; fi
+    if pvesm status --content rootdir 2>/dev/null | awk 'NR>1{print $1}' | grep -qx "$store"; then
+      STORAGE=$store; break
+    fi
   done
-  [[ -z "${STORAGE:-}" ]] && STORAGE=$(pvesm status --content vztmpl | awk 'NR>1 {print $1; exit}')
+  [[ -z "${STORAGE:-}" ]] && STORAGE=$(pvesm status --content rootdir | awk 'NR>1 {print $1; exit}')
+  [[ -z "${STORAGE:-}" ]] && error "No storage available for the container rootfs"
 
-  info "Downloading Debian 13 (Trixie) template …"
+  # ── Template storage (MUST support 'vztmpl' content — usually 'local') ──
+  # LVM/ZFS block storages cannot hold templates; using one yields:
+  #   lvm name 'vztmpl/debian-…tar.zst' contains illegal characters
+  TEMPLATE_STORAGE=$(pvesm status --content vztmpl 2>/dev/null | awk 'NR>1 {print $1; exit}')
+  [[ -z "${TEMPLATE_STORAGE:-}" ]] && error \
+    "No storage supports container templates (vztmpl). Enable the 'Container template' content type on a directory storage such as 'local'."
+
+  info "Downloading Debian 13 (Trixie) template to '$TEMPLATE_STORAGE' …"
   pveam update >/dev/null 2>&1 || true
   # Try Debian 13 first, fall back to 12
   TEMPLATE=$(pveam available --section system 2>/dev/null \
@@ -86,10 +105,15 @@ if $ON_PROXMOX; then
     TEMPLATE=$(pveam available --section system | grep "debian-12-standard" | tail -1 | awk '{print $2}')
   fi
   [[ -z "$TEMPLATE" ]] && error "No Debian template found. Run: pveam update"
-  pveam download "$STORAGE" "$TEMPLATE" 2>/dev/null || true
+
+  # Download only if not already present (do NOT swallow errors — they used to
+  # stay hidden until the much more cryptic 'pct create' failure)
+  if ! pveam list "$TEMPLATE_STORAGE" 2>/dev/null | grep -q "$TEMPLATE"; then
+    pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
+  fi
 
   info "Creating hardened LXC $VMID …"
-  pct create "$VMID" "$STORAGE:vztmpl/$TEMPLATE" \
+  pct create "$VMID" "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" \
     --hostname goodwe-guru \
     --cores 1 \
     --memory 512 \
@@ -139,6 +163,8 @@ EOF
   echo -e "  ${BLU}Container ID :${NC} $VMID"
   echo -e "  ${BLU}Local URL    :${NC} http://${LXC_IP:-<container-ip>}"
   [[ -n "${DOMAIN:-}" ]] && echo -e "  ${BLU}Secure URL   :${NC} https://$DOMAIN"
+  echo -e "  ${BLU}Password     :${NC} ${APP_PASSWORD}"
+  $PASSWORD_GENERATED && echo -e "               ${YLW}(auto-generated — save it now)${NC}"
   echo -e "  ${BLU}Logs         :${NC} pct exec $VMID -- journalctl -u $SERVICE_NAME -f"
   echo ""
   exit 0
@@ -473,6 +499,8 @@ echo -e "${GRN}╚════════════════════�
 echo ""
 echo -e "  ${BLU}Local URL   :${NC} http://${IP}"
 [[ -n "${DOMAIN:-}" ]] && echo -e "  ${BLU}Secure URL  :${NC} https://${DOMAIN}"
+echo -e "  ${BLU}Password    :${NC} ${APP_PASSWORD:-<set in config.env>}"
+${PASSWORD_GENERATED:-false} && echo -e "              ${YLW}(auto-generated — save it now)${NC}"
 echo -e "  ${BLU}Config      :${NC} ${DATA_DIR}/config.env"
 echo -e "  ${BLU}Logs        :${NC} journalctl -u ${SERVICE_NAME} -f"
 echo -e "  ${BLU}Service     :${NC} systemctl status ${SERVICE_NAME}"
