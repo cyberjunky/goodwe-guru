@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# GoodWe Monitor — Proxmox VE LXC Helper Script
+# GoodWe Guru — Proxmox VE LXC Helper Script
 #
 # Run on the Proxmox HOST:
-#   bash <(curl -fsSL https://raw.githubusercontent.com/cyberjunky/goodwe-monitor/main/install.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/cyberjunky/goodwe-guru/main/install.sh)
 #
 # Or run manually inside any Debian 13 / Ubuntu 24.04 system:
-#   curl -fsSL https://raw.githubusercontent.com/cyberjunky/goodwe-monitor/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/cyberjunky/goodwe-guru/main/install.sh | bash
 #
 # What it does:
 #   1. Creates a hardened Debian 13 (Trixie) LXC on Proxmox
@@ -31,18 +31,18 @@ ON_PROXMOX=false
 command -v pct &>/dev/null && ON_PROXMOX=true
 
 # ── Static config ─────────────────────────────────────────────────────────────
-APP_DIR="/opt/goodwe-monitor"
-DATA_DIR="/data/goodwe-monitor"
+APP_DIR="/opt/goodwe-guru"
+DATA_DIR="/data/goodwe-guru"
 SERVICE_USER="goodwe"
-SERVICE_NAME="goodwe-monitor"
-NGINX_CONF="/etc/nginx/sites-available/goodwe-monitor"
+SERVICE_NAME="goodwe-guru"
+NGINX_CONF="/etc/nginx/sites-available/goodwe-guru"
 NODE_MAJOR=20
-REPO_URL="${REPO_URL:-https://github.com/cyberjunky/goodwe-monitor.git}"
+REPO_URL="${REPO_URL:-https://github.com/cyberjunky/goodwe-guru.git}"
 
 # ── Interactive prompts ───────────────────────────────────────────────────────
 echo ""
 echo -e "${YLW}╔══════════════════════════════════════════╗${NC}"
-echo -e "${YLW}║      GoodWe Monitor — Setup Wizard       ║${NC}"
+echo -e "${YLW}║      GoodWe Guru — Setup Wizard       ║${NC}"
 echo -e "${YLW}╚══════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -90,7 +90,7 @@ if $ON_PROXMOX; then
 
   info "Creating hardened LXC $VMID …"
   pct create "$VMID" "$STORAGE:vztmpl/$TEMPLATE" \
-    --hostname goodwe-monitor \
+    --hostname goodwe-guru \
     --cores 1 \
     --memory 512 \
     --swap 256 \
@@ -101,7 +101,7 @@ if $ON_PROXMOX; then
     --features "nesting=0" \
     --onboot 1 \
     --start 1 \
-    --description "GoodWe Monitor — solar dashboard"
+    --description "GoodWe Guru — solar dashboard"
 
   # Harden LXC: drop all Linux capabilities except what's needed
   # (no cap_net_admin, no cap_sys_admin, no cap_dac_override, etc.)
@@ -133,7 +133,7 @@ EOF
   LXC_IP=$(pct exec "$VMID" -- hostname -I 2>/dev/null | awk '{print $1}')
   echo ""
   echo -e "${GRN}╔════════════════════════════════════════════════════╗${NC}"
-  echo -e "${GRN}║  GoodWe Monitor installed successfully!            ║${NC}"
+  echo -e "${GRN}║  GoodWe Guru installed successfully!            ║${NC}"
   echo -e "${GRN}╚════════════════════════════════════════════════════╝${NC}"
   echo ""
   echo -e "  ${BLU}Container ID :${NC} $VMID"
@@ -198,7 +198,7 @@ if [[ -d "$APP_DIR/.git" ]]; then
   info "Updating existing install …"
   git -C "$APP_DIR" pull --ff-only
 else
-  info "Cloning GoodWe Monitor …"
+  info "Cloning GoodWe Guru …"
   git clone "$REPO_URL" "$APP_DIR"
 fi
 chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
@@ -222,8 +222,8 @@ ok "Frontend built"
 info "Creating sandboxed systemd service …"
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
-Description=GoodWe Monitor
-Documentation=https://github.com/cyberjunky/goodwe-monitor
+Description=GoodWe Guru
+Documentation=https://github.com/cyberjunky/goodwe-guru
 After=network-online.target
 Wants=network-online.target
 
@@ -389,7 +389,7 @@ cat > /etc/nginx/snippets/goodwe-proxy.conf <<'SNIPPET'
     }
 SNIPPET
 
-ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/goodwe-monitor
+ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/goodwe-guru
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 ok "nginx configured with rate limiting and security headers"
@@ -468,7 +468,7 @@ ok "fail2ban configured (nginx brute-force protection active)"
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 echo ""
 echo -e "${GRN}╔════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GRN}║  GoodWe Monitor installed successfully!               ║${NC}"
+echo -e "${GRN}║  GoodWe Guru installed successfully!               ║${NC}"
 echo -e "${GRN}╚════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  ${BLU}Local URL   :${NC} http://${IP}"

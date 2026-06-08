@@ -1,8 +1,6 @@
-# GoodWe Monitor
+# GoodWe Guru
 
-A self-hosted web dashboard for monitoring and controlling GoodWe inverters and battery storage systems — a full-featured replacement for the SolarGo app.
-
-![Dashboard](screenshots/01-dashboard-desktop.png)
+A self-hosted web dashboard for monitoring and controlling GoodWe inverters and battery storage — a full-featured replacement for the SolarGo app.
 
 ## Features
 
@@ -12,10 +10,10 @@ A self-hosted web dashboard for monitoring and controlling GoodWe inverters and 
 - Per-string PV data (voltage, current, power for up to 4 strings)
 - 3-phase grid data (voltage, current, frequency, import/export per phase)
 - Detailed battery info: SoC/SoH gauge, cell voltages, cell temperatures, BMS data
-- Live mini chart of power over the last 2 hours
+- Live power chart (last 2 hours)
 
 ### All settings exposed (not just what SolarGo shows)
-| Setting | SolarGo | GoodWe Monitor |
+| Setting | SolarGo | GoodWe Guru |
 |---|---|---|
 | Work modes (0–5 incl. Self-Use) | 0–4 only | ✅ All 6 |
 | EMS mode (10 modes) | Limited | ✅ All 10 |
@@ -26,159 +24,129 @@ A self-hosted web dashboard for monitoring and controlling GoodWe inverters and 
 | Battery capacity / DoD / SoC protection | Partial | ✅ Full |
 | DRED / PEN relay / unbalanced output | ✗ | ✅ |
 
+### Automations — rule-based inverter control
+Emulate Self-Use mode (missing on the ES series) and any custom behaviour:
+- **Max SoC cap** — stop charging above X% (write export limit = 0 until full)
+- **Min SoC floor** — ECO charge when battery drops below Y% (overnight reserve)
+- **Pre-evening boost** — charge to target SoC before dark so you coast through the night
+- **Peak shaving** — start discharging when grid import exceeds W
+- **Smart Self-Use set** — 4 rules in one click (combines all of the above)
+- Built-in **hysteresis** prevents oscillation at thresholds (configurable dead band)
+- Rules fire every 30 s, optional Telegram notification on each trigger
+
 ### Finance & sustainability
 - Import cost, export revenue, solar savings per day/month/year
 - Time-of-use tariff support (peak / off-peak windows)
-- System payback progress bar (enter installation cost → track recovery)
+- System payback progress bar
 - CO₂ avoided vs grid electricity
-- Self-sufficiency % and self-consumption % trends
 
 ### Solar forecast
-- Integrates with [Forecast.Solar](https://forecast.solar) (free, no account needed)
-- Supports multiple roof planes / orientations
-- Hourly forecast chart with "Now" marker and actual production overlay
-- 5-day outlook
+- [Forecast.Solar](https://forecast.solar) API (free, no account)
+- Multi-plane / multi-orientation support
+- Hourly chart with "Now" marker
 
 ### Telegram notifications
-Events that trigger alerts (all individually configurable):
-- 🔴 Battery critical / 🟡 Battery low / ✅ Battery full
-- ⚠️ Fault code detected / ✅ Fault cleared
-- 🔌 Grid outage / 🔋 Grid restored
-- 📈 High grid import
-- ☀️ Solar production started / 🌙 Ended
-- 📊 Daily summary (energy + financial breakdown, configurable send time)
+- Battery critical / low / full, fault codes, grid outage, daily summary
+- All individually configurable with thresholds
 
 ### External BMS bridge (BeagleBone / RS485 / CAN)
-Per-cell data from RS485/CAN battery management systems connects via WebSocket to `/ws/bms`. Data is merged into the live stream and shown on the Battery page.
-
----
-
-## Screenshots
-
-| Page | Desktop | Mobile |
-|------|---------|--------|
-| Login | ![](screenshots/00-login-desktop.png) | ![](screenshots/00-login-mobile.png) |
-| Dashboard | ![](screenshots/01-dashboard-desktop.png) | ![](screenshots/01-dashboard-mobile.png) |
-| Solar | ![](screenshots/02-solar-desktop.png) | ![](screenshots/02-solar-mobile.png) |
-| Battery | ![](screenshots/03-battery-desktop.png) | ![](screenshots/03-battery-mobile.png) |
-| Grid | ![](screenshots/04-grid-desktop.png) | ![](screenshots/04-grid-mobile.png) |
-| Finance | ![](screenshots/05-finance-desktop.png) | ![](screenshots/05-finance-mobile.png) |
-| Forecast | ![](screenshots/06-forecast-desktop.png) | ![](screenshots/06-forecast-mobile.png) |
-| History | ![](screenshots/07-history-desktop.png) | ![](screenshots/07-history-mobile.png) |
-| Settings – Inverter | ![](screenshots/08-settings-desktop.png) | ![](screenshots/08-settings-mobile.png) |
-| Settings – Tariffs | ![](screenshots/08-settings-tariffs-desktop.png) | — |
-| Settings – Notifications | ![](screenshots/08-settings-notifications-desktop.png) | — |
-| Faults | ![](screenshots/09-faults-desktop.png) | ![](screenshots/09-faults-mobile.png) |
+Per-cell data connects via WebSocket `/ws/bms` and is merged into the live stream.
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  LXC Container (Debian 13, Proxmox VE)               │
-│                                                      │
-│  nginx (80/443) ──→ FastAPI :8000                    │
-│       ↑                   │                          │
-│  Let's Encrypt            ├─ goodwe lib (Modbus/UDP) │
-│  (certbot)                ├─ SQLite history          │
-│                           ├─ JWT auth                │
-│  Browser ←── React SPA    ├─ Telegram notifications  │
-│  (built, served static)   └─ Forecast.Solar API      │
-│                                                      │
-│  /ws/bms ←── BeagleBone RS485/CAN bridge             │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  LXC Container (Debian 13, Proxmox VE)                  │
+│                                                         │
+│  nginx (80/443) ──▶ FastAPI :8000                       │
+│       ↑                    │                            │
+│  Let's Encrypt             ├─ goodwe lib (Modbus/UDP)   │
+│  fail2ban                  ├─ SQLite history            │
+│                            ├─ JWT auth                  │
+│  Browser ◀── React SPA     ├─ Telegram notifications    │
+│  (served as static files)  ├─ Forecast.Solar API        │
+│                            └─ Automation engine (30s)   │
+│                                                         │
+│  /ws/bms ◀── BeagleBone RS485/CAN bridge                │
+└─────────────────────────────────────────────────────────┘
 ```
 
-**Stack:**
-- Backend: Python 3.11+ · FastAPI · goodwe · PyJWT · httpx · SQLite
-- Frontend: React 19 · Vite · TypeScript · Tailwind CSS v4 · Recharts
-- Proxy: nginx with rate limiting, security headers, certbot/Let's Encrypt
+**Stack:** Python 3 · FastAPI · goodwe · PyJWT · httpx · SQLite  |  React 19 · Vite · TypeScript · Tailwind CSS v4 · Recharts
 
 ---
 
-## Quick install (Proxmox VE host)
+## Install on Proxmox VE
+
+### Option A — repo is public
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/cyberjunky/goodwe-monitor/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/cyberjunky/goodwe-guru/main/install.sh)
 ```
 
-This will:
-1. Create a **Debian 13 LXC** container (unprivileged, 1 core, 512 MB RAM, 4 GB disk)
-2. Install Python 3, Node.js 20, nginx, certbot, fail2ban
-3. Clone this repo, build the React frontend, install Python dependencies
-4. Start a **systemd service** (`goodwe-monitor`) that auto-restarts on boot
-5. Configure **nginx** as reverse proxy with rate limiting and security headers
-6. Optionally obtain a **Let's Encrypt** certificate for your subdomain
-
-### Manual install (inside any Debian/Ubuntu system)
+### Option B — repo is private (clone first)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cyberjunky/goodwe-monitor/main/install.sh | bash
+# On your Proxmox host or inside an existing Debian container:
+git clone https://github.com/cyberjunky/goodwe-guru.git
+bash goodwe-guru/install.sh
+```
+
+The script will ask for your inverter IP, a password, and an optional domain name for HTTPS.  
+It creates a **Debian 13 LXC**, installs all dependencies, builds the frontend, starts a systemd service, and configures nginx + certbot + fail2ban.
+
+### Manual install (any Debian/Ubuntu system)
+
+```bash
+git clone https://github.com/cyberjunky/goodwe-guru.git
+cd goodwe-guru
+bash install.sh
 ```
 
 ---
 
 ## Configuration
 
-All configuration lives in `/data/goodwe-monitor/config.env`:
+All settings live in `/data/goodwe-monitor/config.env` inside the container:
 
 ```env
-INVERTER_HOST=192.168.1.100    # GoodWe inverter IP address
+INVERTER_HOST=192.168.1.100    # GoodWe inverter IP
 APP_PASSWORD=changeme           # Dashboard login password
-POLL_INTERVAL=10                # Inverter poll interval (seconds)
-JWT_SECRET=<random hex>         # Generated automatically
-JWT_EXPIRE_DAYS=30
+POLL_INTERVAL=10                # Seconds between inverter polls
+JWT_SECRET=<auto-generated>
 DB_PATH=/data/goodwe-monitor/history.db
 ```
 
-After editing, restart the service:
-```bash
-systemctl restart goodwe-monitor
-```
-
-View logs:
-```bash
-journalctl -u goodwe-monitor -f
-```
+After editing: `systemctl restart goodwe-monitor`  
+View logs: `journalctl -u goodwe-monitor -f`
 
 ---
 
 ## Tariff & forecast configuration
 
-Configure in the dashboard under **Settings → Tariffs** and **Settings → Forecast** (Forecast.Solar API, free).
+Settings → **Tariffs** tab and Settings → **Forecast** tab (in-app).
 
 ---
 
 ## Telegram notifications setup
 
-1. Message **@BotFather** on Telegram → `/newbot` → copy the **Bot Token**
-2. Start a conversation with your bot (or add it to a group)
-3. Visit `https://api.telegram.org/bot{TOKEN}/getUpdates` to get your **Chat ID**
-4. Enter both in **Settings → Notifications** → toggle the events you want → Save
+1. Message **@BotFather** → `/newbot` → copy Bot Token
+2. Start a chat with the bot or add it to a group
+3. Visit `https://api.telegram.org/bot{TOKEN}/getUpdates` → find Chat ID
+4. Enter both in Settings → **Notifications** → Save
 
 ---
 
 ## BeagleBone BMS bridge
 
-Connect your BeagleBone (RS485/CAN → serial reader) to the `/ws/bms` WebSocket endpoint:
+Connect your RS485/CAN reader to `/ws/bms?token=<jwt>` and send JSON frames:
 
-```
-ws://your-server/ws/bms?token=<jwt-token>
-```
-
-Send JSON frames every few seconds:
 ```json
-{
-  "cell_voltages": [3.42, 3.41, 3.43, 3.40],
-  "temperatures":  [28.1, 27.9],
-  "soc": 78,
-  "current": 35.7,
-  "voltage": 51.6
-}
+{"cell_voltages":[3.42,3.41,3.43],"temperatures":[28.1],"soc":78,"current":35.7,"voltage":51.6}
 ```
 
-All keys are prefixed as `bms_ext_*` and merged into the live data stream.
+Keys appear as `bms_ext_*` in the live data stream and Battery page.
 
 ---
 
@@ -186,9 +154,11 @@ All keys are prefixed as `bms_ext_*` and merged into the live data stream.
 
 Via the [goodwe Python library](https://github.com/mletenay/home-assistant-goodwe-inverter):
 
-- **Hybrid / storage**: ET, EH, BH, BT, GE, ES, EM, BP, EI, ABP, AES, SBP series
-- **Grid-tied**: XS, DNS, MS, SDT, MT, GT, HT, UT series
-- Tested with ET 5–10K, ES 3–6K, EH 3.6–6K
+| Platform | Series | Notes |
+|---|---|---|
+| 105 (ES/EM/BP) | ES 3–10K, EM, BP | No EMS modes, no Self-Use (emulated via Automations) |
+| 205/745 (ET/EH/BT/BH/GE) | ET 5–50K, EH 3.6K | Full EMS + Self-Use (mode 5) native |
+| Grid-tied | XS, DNS, SDT, GT, HT, UT | Monitoring only |
 
 ---
 

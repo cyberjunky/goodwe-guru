@@ -58,7 +58,7 @@ export default function Layout() {
             <Sun size={15} className="text-gray-950" />
           </div>
           <div className="hidden lg:block">
-            <div className="text-[13px] font-semibold text-white leading-tight">GoodWe Monitor</div>
+            <div className="text-[13px] font-semibold text-white leading-tight">GoodWe Guru</div>
             <div className="text-[10px] text-gray-500 leading-tight">Solar Dashboard</div>
           </div>
         </div>
@@ -96,7 +96,7 @@ export default function Layout() {
               style={{ background: 'linear-gradient(135deg, #e8950a, #f0a820)' }}>
               <Sun size={14} className="text-gray-950" />
             </div>
-            <span className="font-semibold text-[13px] text-white">GoodWe Monitor</span>
+            <span className="font-semibold text-[13px] text-white">GoodWe Guru</span>
           </div>
           <ConnectionChip />
         </header>

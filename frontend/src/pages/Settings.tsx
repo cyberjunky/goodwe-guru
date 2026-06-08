@@ -257,7 +257,7 @@ function NotificationSettings() {
   async function sendTest() {
     setTesting(true); setTestResult(null)
     try {
-      const r = await fetch('/api/notifications/test', { method: 'POST', headers, body: JSON.stringify({ message: '🔔 Test from GoodWe Monitor — notifications are working!' }) })
+      const r = await fetch('/api/notifications/test', { method: 'POST', headers, body: JSON.stringify({ message: '🔔 Test from GoodWe Guru — notifications are working!' }) })
       const j = await r.json()
       setTestResult(j.ok ? 'ok' : 'fail')
     } catch { setTestResult('fail') }

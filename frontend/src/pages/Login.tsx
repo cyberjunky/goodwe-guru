@@ -37,7 +37,7 @@ export default function Login({ onLogin }: Props) {
           <div className="w-14 h-14 rounded-2xl bg-amber-500 flex items-center justify-center mb-4">
             <Sun size={28} className="text-gray-950" />
           </div>
-          <h1 className="text-2xl font-semibold text-white">GoodWe Monitor</h1>
+          <h1 className="text-2xl font-semibold text-white">GoodWe Guru</h1>
           <p className="text-gray-500 text-sm mt-1">Sign in to access your inverter dashboard</p>
         </div>
 
