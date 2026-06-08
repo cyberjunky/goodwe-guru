@@ -22,17 +22,19 @@ const EMS_MODES = [
   { value: 8, label: 'Battery Standby', desc: 'Battery does not charge or discharge' },
 ]
 
-function SettingRow({ label, desc, children }: { label: string; desc?: string; children: React.ReactNode }) {
+/** Compact card for use inside a CSS grid — label + description stacked above the control */
+function GridSetting({ label, desc, children }: { label: string; desc?: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between py-3 border-b border-gray-800 last:border-0 gap-4">
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-gray-200">{label}</div>
-        {desc && <div className="text-xs text-gray-500 mt-0.5">{desc}</div>}
+    <div className="bg-gray-800/60 border border-gray-700/50 rounded-xl p-3 flex flex-col gap-2">
+      <div>
+        <div className="text-xs font-medium text-gray-200">{label}</div>
+        {desc && <div className="text-[10px] text-gray-500 mt-0.5 leading-tight">{desc}</div>}
       </div>
-      <div className="shrink-0">{children}</div>
+      <div>{children}</div>
     </div>
   )
 }
+
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -474,66 +476,75 @@ export default function Settings() {
       </div>
       )}
 
-      {/* Export & Power control */}
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-4">Export & Power Control</h2>
-        <SettingRow label="Grid Export" desc="Allow exporting surplus energy to the grid">
-          <Toggle checked={!!(local.grid_export)} onChange={v => set('grid_export', v)} />
-        </SettingRow>
-        <SettingRow label="Export Limit" desc="Maximum power to export (0 = disabled)">
-          <NumInput value={(local.grid_export_limit as number) ?? 0} onChange={v => set('grid_export_limit', v)} min={0} max={15000} unit="W" />
-        </SettingRow>
-        <SettingRow label="EMS Power Limit" desc="Maximum EMS charging power">
-          <NumInput value={(local.ems_power_limit as number) ?? 0} onChange={v => set('ems_power_limit', v)} min={0} max={15000} unit="W" />
-        </SettingRow>
-        <SettingRow label="Shadow Scan" desc="MPPT shadow scanning for partially shaded strings">
-          <Toggle checked={!!(local.shadow_scan)} onChange={v => set('shadow_scan', v)} />
-        </SettingRow>
+      {/* Export & Power + Battery — side by side */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+
+        {/* Export & Power */}
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+          <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Export & Power Control</h2>
+          <div className="grid grid-cols-2 gap-3">
+            <GridSetting label="Export Limit" desc="Max export, 0=off">
+              <NumInput value={(local.grid_export_limit as number) ?? 0} onChange={v => set('grid_export_limit', v)} min={0} max={15000} unit="W" />
+            </GridSetting>
+            <GridSetting label="EMS Power Limit" desc="Max EMS charge power">
+              <NumInput value={(local.ems_power_limit as number) ?? 0} onChange={v => set('ems_power_limit', v)} min={0} max={15000} unit="W" />
+            </GridSetting>
+            <GridSetting label="Grid Export" desc="Allow grid export">
+              <Toggle checked={!!(local.grid_export)} onChange={v => set('grid_export', v)} />
+            </GridSetting>
+            <GridSetting label="Shadow Scan" desc="MPPT shade scan">
+              <Toggle checked={!!(local.shadow_scan)} onChange={v => set('shadow_scan', v)} />
+            </GridSetting>
+          </div>
+        </div>
+
+        {/* Battery */}
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+          <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Battery Configuration</h2>
+          <div className="grid grid-cols-2 gap-3">
+            <GridSetting label="Capacity" desc="Usable capacity (Ah)">
+              <NumInput value={(local.battery_capacity as number) ?? 100} onChange={v => set('battery_capacity', v)} min={1} max={1000} unit="Ah" />
+            </GridSetting>
+            <GridSetting label="Max DoD" desc="Min SoC on-grid">
+              <NumInput value={(local.battery_discharge_depth as number) ?? 10} onChange={v => set('battery_discharge_depth', v)} min={0} max={95} unit="%" />
+            </GridSetting>
+            <GridSetting label="Offline DoD" desc="Min SoC during outage">
+              <NumInput value={(local.battery_discharge_depth_offline as number) ?? 10} onChange={v => set('battery_discharge_depth_offline', v)} min={0} max={95} unit="%" />
+            </GridSetting>
+            <GridSetting label="SoC Reserve" desc="Reserve for outages">
+              <NumInput value={(local.battery_soc_protection as number) ?? 10} onChange={v => set('battery_soc_protection', v)} min={0} max={50} unit="%" />
+            </GridSetting>
+            <GridSetting label="Backup / EPS" desc="Output on grid failure">
+              <Toggle checked={!!(local.backup_supply)} onChange={v => set('backup_supply', v)} />
+            </GridSetting>
+            <GridSetting label="Fast Charging" desc="Fast charge (FW19+)">
+              <Toggle checked={!!(local.fast_charging)} onChange={v => set('fast_charging', v)} />
+            </GridSetting>
+            {!!local.fast_charging && <>
+              <GridSetting label="Fast Charge SoC" desc="Stop at this SoC">
+                <NumInput value={(local.fast_charging_soc as number) ?? 90} onChange={v => set('fast_charging_soc', v)} min={50} max={100} unit="%" />
+              </GridSetting>
+              <GridSetting label="Fast Charge Power" desc="% of max power">
+                <NumInput value={(local.fast_charging_power as number) ?? 100} onChange={v => set('fast_charging_power', v)} min={10} max={100} unit="%" />
+              </GridSetting>
+            </>}
+          </div>
+        </div>
       </div>
 
-      {/* Battery settings */}
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-4">Battery Configuration</h2>
-        <SettingRow label="Battery Capacity" desc="Configured usable battery capacity">
-          <NumInput value={(local.battery_capacity as number) ?? 100} onChange={v => set('battery_capacity', v)} min={1} max={1000} unit="Ah" />
-        </SettingRow>
-        <SettingRow label="Max Discharge Depth" desc="Minimum SoC before stopping discharge">
-          <NumInput value={(local.battery_discharge_depth as number) ?? 10} onChange={v => set('battery_discharge_depth', v)} min={0} max={95} unit="%" />
-        </SettingRow>
-        <SettingRow label="Offline Discharge Depth" desc="Minimum SoC during grid outage (EPS)">
-          <NumInput value={(local.battery_discharge_depth_offline as number) ?? 10} onChange={v => set('battery_discharge_depth_offline', v)} min={0} max={95} unit="%" />
-        </SettingRow>
-        <SettingRow label="SoC Protection" desc="SoC reserve for unexpected outages">
-          <NumInput value={(local.battery_soc_protection as number) ?? 10} onChange={v => set('battery_soc_protection', v)} min={0} max={50} unit="%" />
-        </SettingRow>
-        <SettingRow label="Backup Supply" desc="Enable backup/EPS output during grid failure">
-          <Toggle checked={!!(local.backup_supply)} onChange={v => set('backup_supply', v)} />
-        </SettingRow>
-        <SettingRow label="Fast Charging" desc="Enable fast charge mode when available (FW19+)">
-          <Toggle checked={!!(local.fast_charging)} onChange={v => set('fast_charging', v)} />
-        </SettingRow>
-        {!!local.fast_charging && (
-          <>
-            <SettingRow label="Fast Charge SoC Target" desc="Stop fast charging at this SoC">
-              <NumInput value={(local.fast_charging_soc as number) ?? 90} onChange={v => set('fast_charging_soc', v)} min={50} max={100} unit="%" />
-            </SettingRow>
-            <SettingRow label="Fast Charge Power" desc="Fast charge power as % of max">
-              <NumInput value={(local.fast_charging_power as number) ?? 100} onChange={v => set('fast_charging_power', v)} min={10} max={100} unit="%" />
-            </SettingRow>
-          </>
-        )}
-      </div>
-
-      {/* Peak shaving */}
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-4">Peak Shaving</h2>
-        <SettingRow label="Peak Shaving Power Limit" desc="Maximum grid import — battery discharges above this">
-          <NumInput value={(local.peak_shaving_power_limit as number) ?? 3000} onChange={v => set('peak_shaving_power_limit', v)} min={0} max={15000} unit="W" />
-        </SettingRow>
-        <SettingRow label="Minimum SoC for Shaving" desc="Only shave peaks if battery is above this level">
-          <NumInput value={(local.peak_shaving_soc as number) ?? 30} onChange={v => set('peak_shaving_soc', v)} min={0} max={100} unit="%" />
-        </SettingRow>
-      </div>
+      {/* Peak shaving + Grid Safety — side by side */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+          <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Peak Shaving</h2>
+          <div className="grid grid-cols-2 gap-3">
+            <GridSetting label="Power Limit" desc="Max grid import (W)">
+              <NumInput value={(local.peak_shaving_power_limit as number) ?? 3000} onChange={v => set('peak_shaving_power_limit', v)} min={0} max={15000} unit="W" />
+            </GridSetting>
+            <GridSetting label="Min SoC" desc="Only shave above this %">
+              <NumInput value={(local.peak_shaving_soc as number) ?? 30} onChange={v => set('peak_shaving_soc', v)} min={0} max={100} unit="%" />
+            </GridSetting>
+          </div>
+        </div>
 
       {/* Eco schedule */}
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
@@ -545,19 +556,23 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* Grid / safety */}
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-4">Grid & Safety</h2>
-        <SettingRow label="PEN Relay" desc="PE-N relay bonding control">
-          <Toggle checked={!!(local.pen_relay)} onChange={v => set('pen_relay', v)} />
-        </SettingRow>
-        <SettingRow label="DRED / Remote Shutdown" desc="Enable demand response / remote shutdown support">
-          <Toggle checked={!!(local.dred)} onChange={v => set('dred', v)} />
-        </SettingRow>
-        <SettingRow label="Unbalanced Output" desc="Allow unbalanced 3-phase output">
-          <Toggle checked={!!(local.unbalanced_output)} onChange={v => set('unbalanced_output', v)} />
-        </SettingRow>
-      </div>
+        {/* Grid & Safety — right column of the side-by-side pair */}
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+          <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Grid & Safety</h2>
+          <div className="grid grid-cols-2 gap-3">
+            <GridSetting label="PEN Relay" desc="PE-N relay bonding">
+              <Toggle checked={!!(local.pen_relay)} onChange={v => set('pen_relay', v)} />
+            </GridSetting>
+            <GridSetting label="DRED / Remote Off" desc="Demand response support">
+              <Toggle checked={!!(local.dred)} onChange={v => set('dred', v)} />
+            </GridSetting>
+            <GridSetting label="Unbalanced Output" desc="Allow 3-phase imbalance">
+              <Toggle checked={!!(local.unbalanced_output)} onChange={v => set('unbalanced_output', v)} />
+            </GridSetting>
+          </div>
+        </div>
+      </div> {/* closes Peak Shaving + Grid Safety grid */}
+
       </>}
     </div>
   )

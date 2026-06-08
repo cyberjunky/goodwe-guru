@@ -32,11 +32,14 @@ export default function History() {
   async function fetchData() {
     setLoading(true)
     try {
-      const res = await fetch(`/api/history?range=${range}`)
-      const json = await res.json()
-      setData(json)
+      const token = localStorage.getItem('gw_token') ?? ''
+      const res = await fetch(`/api/history?range=${range}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) { setData([]); return }
+      setData(await res.json())
     } catch { setData([]) }
-    setLoading(false)
+    finally { setLoading(false) }
   }
 
   const totals = data.reduce((acc, d) => ({
