@@ -244,6 +244,10 @@ async def write_setting(body: SettingWrite, _: str = Depends(require_auth)):
 async def get_history(range: str = Query("7d"), _: str = Depends(require_auth)):
     return db.get_history(range)
 
+@app.get("/api/energy-flow")
+async def get_energy_flow(date: str | None = Query(None), _: str = Depends(require_auth)):
+    return db.get_energy_flow(date)
+
 @app.get("/api/status")
 async def get_status(_: str = Depends(require_auth)):
     return {
@@ -416,6 +420,7 @@ async def get_forecast(force: bool = Query(False), _: str = Depends(require_auth
         "daily":        daily_forecast(data),
         "fetched_at":   data.get("fetched_at"),
         "errors":       data.get("errors", []),
+        "source":       data.get("source"),
         "configured":   fc.enabled,
     }
 

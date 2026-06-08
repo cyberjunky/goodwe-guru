@@ -128,6 +128,78 @@ class Database:
 
         return [{"ts": r["date"], **{k: r[k] for k in r.keys() if k != "date"}} for r in rows]
 
+    def get_energy_flow(self, date: str | None = None) -> dict:
+        """
+        Integrate the day's raw snapshots into Sankey-style energy flows (kWh),
+        decomposing each instant by a priority model:
+          solar → load, then battery charge, then grid export
+          battery discharge → load
+          grid import → load, then battery charge
+        Works without inverter import/export counters (which ES lacks).
+        """
+        import json
+        if not date:
+            date = datetime.now().strftime("%Y-%m-%d")
+        try:
+            start_dt = datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            date = start_dt.strftime("%Y-%m-%d")
+        start = int(start_dt.timestamp())
+        end   = int((start_dt + timedelta(days=1)).timestamp())
+
+        rows = self.con.execute(
+            "SELECT ts, data FROM snapshots WHERE ts>=? AND ts<? ORDER BY ts",
+            (start, end),
+        ).fetchall()
+
+        links = {"solar_load": 0.0, "solar_batt": 0.0, "solar_grid": 0.0,
+                 "batt_load": 0.0, "grid_load": 0.0, "grid_batt": 0.0}
+        prev_ts = None
+        for r in rows:
+            ts = r["ts"]
+            d  = json.loads(r["data"])
+            if prev_ts is not None:
+                dt = ts - prev_ts
+                if 0 < dt <= 120:                       # cap gaps so outages don't inflate
+                    h     = dt / 3600.0
+                    solar = max(float(d.get("ppv", 0) or 0), 0)
+                    pb    = float(d.get("pbattery1", 0) or 0)   # >0 charge, <0 discharge
+                    bc, bd = max(pb, 0), max(-pb, 0)
+                    pg    = float(d.get("pgrid", 0) or 0)       # >0 import, <0 export (normalised)
+                    gi    = max(pg, 0)
+                    load  = max(float(d.get("load_ptotal", 0) or 0), 0)
+
+                    L = load
+                    s_load = min(solar, L);          s = solar - s_load; L -= s_load
+                    b_load = min(bd, L);                                  L -= b_load
+                    g_load = min(gi, L);             gi2 = gi - g_load;   L -= g_load
+                    s_batt = min(s, bc);             s -= s_batt; bc2 = bc - s_batt
+                    s_grid = s                                            # leftover solar exports
+                    g_batt = min(gi2, bc2)
+
+                    links["solar_load"] += s_load * h
+                    links["solar_batt"] += s_batt * h
+                    links["solar_grid"] += s_grid * h
+                    links["batt_load"]  += b_load * h
+                    links["grid_load"]  += g_load * h
+                    links["grid_batt"]  += g_batt * h
+            prev_ts = ts
+
+        links = {k: round(v / 1000, 3) for k, v in links.items()}   # Wh → kWh
+        sources = {
+            "solar":   round(links["solar_load"] + links["solar_batt"] + links["solar_grid"], 3),
+            "battery": round(links["batt_load"], 3),
+            "grid":    round(links["grid_load"] + links["grid_batt"], 3),
+        }
+        destinations = {
+            "load":    round(links["solar_load"] + links["batt_load"] + links["grid_load"], 3),
+            "battery": round(links["solar_batt"] + links["grid_batt"], 3),
+            "grid":    round(links["solar_grid"], 3),
+        }
+        return {"date": date, "links": links, "sources": sources,
+                "destinations": destinations, "samples": len(rows)}
+
     def get_today_summary(self) -> dict:
         """Return today's daily_summary row as a dict (for Telegram daily message)."""
         date = datetime.utcnow().strftime("%Y-%m-%d")

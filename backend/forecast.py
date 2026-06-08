@@ -94,6 +94,40 @@ def _num(x: Any) -> float:
         return 0.0
 
 
+async def _fetch_openmeteo(fc: "ForecastConfig", client) -> tuple[dict, dict, list]:
+    """
+    Fallback forecast via Open-Meteo (free, no key, very reliable).
+    Estimates PV from global horizontal irradiance: power(W) ≈ kWp · GHI · PR.
+    Less precise than Forecast.Solar (ignores tilt/azimuth) but robust.
+    """
+    PR = 0.85
+    watts: dict[str, float] = {}
+    wh_day: dict[str, float] = {}
+    errors: list[str] = []
+    url = (
+        f"https://api.open-meteo.com/v1/forecast"
+        f"?latitude={_num(fc.lat)}&longitude={_num(fc.lon)}"
+        f"&hourly=shortwave_radiation&forecast_days=3&timezone=auto"
+    )
+    try:
+        r = await client.get(url)
+        r.raise_for_status()
+        j = r.json().get("hourly", {})
+        times = j.get("time", [])
+        ghi   = j.get("shortwave_radiation", [])
+        total_kwp = sum(_num(p.get("kwp", 0)) for p in fc.planes)
+        for t, g in zip(times, ghi):
+            if g is None:
+                continue
+            p = total_kwp * float(g) * PR        # W
+            ts = t.replace("T", " ")
+            watts[ts] = watts.get(ts, 0) + p
+            wh_day[t[:10]] = wh_day.get(t[:10], 0) + p   # × 1 h
+    except Exception as e:
+        errors.append(f"Open-Meteo: {e}")
+    return watts, wh_day, errors
+
+
 def clear_cache():
     """Drop cached forecast so the next fetch hits the API (e.g. after a config change)."""
     _mem_cache.clear()
@@ -166,6 +200,18 @@ async def fetch_forecast(fc: ForecastConfig, force: bool = False) -> dict:
                 log.warning("Forecast.Solar fetch failed for plane %s: %s", label, e)
                 errors.append(f"{label}: {e}")
 
+        # Fallback: if Forecast.Solar returned nothing, use Open-Meteo so the
+        # user still gets an estimate (Forecast.Solar's PVGIS errors are common).
+        source = "forecast.solar"
+        if not merged_wh_day:
+            log.info("Forecast.Solar empty — falling back to Open-Meteo")
+            w2, wh2, e2 = await _fetch_openmeteo(fc, client)
+            errors.extend(e2)
+            if wh2:
+                merged_watts, merged_wh_day = w2, wh2
+                source = "open-meteo"
+                errors.append("Forecast.Solar unavailable — showing Open-Meteo estimate (less precise).")
+
     result = {
         "watts":          merged_watts,
         "watt_hours_day": merged_wh_day,
@@ -173,6 +219,7 @@ async def fetch_forecast(fc: ForecastConfig, force: bool = False) -> dict:
         "planes":         fc.planes,
         "cache_key":      cache_key,
         "errors":         errors,
+        "source":         source,
     }
     _mem_cache[cache_key] = result
     try:

@@ -2,7 +2,7 @@ import { NavLink, Outlet } from 'react-router-dom'
 import {
   LayoutDashboard, Battery, Sun, Zap, Settings, BarChart2,
   AlertTriangle, Wifi, WifiOff, RefreshCw, Activity,
-  Euro, CloudSun, Bolt,
+  Euro, CloudSun, Bolt, Workflow,
 } from 'lucide-react'
 import { useInverter } from '../context/InverterContext'
 
@@ -36,6 +36,7 @@ const NAV = [
   { to: '/grid',      icon: Zap,             label: 'Grid'      },
   { to: '/finance',   icon: Euro,            label: 'Finance'   },
   { to: '/forecast',     icon: CloudSun,     label: 'Forecast'    },
+  { to: '/flow',         icon: Workflow,     label: 'Flow'        },
   { to: '/automations', icon: Bolt,         label: 'Automations' },
   { to: '/history',     icon: BarChart2,    label: 'History'     },
   { to: '/settings',  icon: Settings,        label: 'Settings'  },

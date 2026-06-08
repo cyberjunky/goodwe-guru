@@ -14,6 +14,7 @@ interface ForecastResp {
   fetched_at:   number | null
   configured:   boolean
   errors?:      string[]
+  source?:      string
 }
 interface ForecastConfig {
   enabled:  boolean
@@ -211,15 +212,23 @@ export default function Forecast() {
         </div>
       )}
 
-      {/* Fetch errors from Forecast.Solar (rate limit, bad coords, etc.) */}
-      {forecast?.errors && forecast.errors.length > 0 && (
+      {/* Using the Open-Meteo fallback estimate */}
+      {forecast?.source === 'open-meteo' && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 text-xs text-amber-300">
+          Forecast.Solar was unavailable, so this is an <strong>Open-Meteo</strong> estimate
+          (based on irradiance — ignores exact tilt/azimuth, so treat it as approximate).
+        </div>
+      )}
+
+      {/* Real errors only when we got no data at all */}
+      {forecast?.errors && forecast.errors.length > 0 && (!forecast.daily || forecast.daily.length === 0) && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-sm text-red-300">
-          <div className="font-medium mb-1">Forecast.Solar returned an error:</div>
+          <div className="font-medium mb-1">Could not fetch a forecast:</div>
           {forecast.errors.map((e, i) => (
             <div key={i} className="text-xs font-mono text-red-300/90 break-words">{e}</div>
           ))}
           <div className="text-xs text-gray-500 mt-2">
-            Common causes: free-tier rate limit (try again in ~15 min), or invalid coordinates.
+            Forecast.Solar's free tier rate-limits and occasionally errors; it usually recovers in ~15 min.
           </div>
         </div>
       )}

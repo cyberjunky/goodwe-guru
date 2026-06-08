@@ -14,7 +14,8 @@
       "Bash(git update-index *)",
       "Bash(python -m py_compile backend/notifications.py)",
       "Bash(python -m py_compile backend/forecast.py)",
-      "Bash(python -m py_compile backend/main.py backend/forecast.py)"
+      "Bash(python -m py_compile backend/main.py backend/forecast.py)",
+      "Bash(python -m py_compile backend/main.py backend/forecast.py backend/database.py)"
     ]
   }
 }
