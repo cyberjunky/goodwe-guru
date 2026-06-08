@@ -1,5 +1,6 @@
 import { useInverter } from '../context/InverterContext'
 import EnergyFlow from '../components/EnergyFlow'
+import { fmtEnergy } from '../lib/format'
 import { Sun, Battery, Zap, Home, Activity, Clock, Thermometer, Waves } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
@@ -216,9 +217,9 @@ export default function Dashboard() {
 
           <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px' }}>
             <SectionHead><Waves size={10} style={{display:'inline',marginRight:4}}/>All-time Totals</SectionHead>
-            <Row label="Total solar yield" value={((data.e_total    as number??0)/1000).toFixed(1)} unit="MWh" color={T.solar}/>
-            <Row label="Total exported"    value={((data.e_total_exp as number??0)/1000).toFixed(1)} unit="MWh" color={T.exp}/>
-            <Row label="Total imported"    value={((data.e_total_imp as number??0)/1000).toFixed(1)} unit="MWh" color={T.imp}/>
+            <Row label="Total solar yield" value={fmtEnergy(data.e_total     as number).value} unit={fmtEnergy(data.e_total     as number).unit} color={T.solar}/>
+            <Row label="Total exported"    value={fmtEnergy(data.e_total_exp as number).value} unit={fmtEnergy(data.e_total_exp as number).unit} color={T.exp}/>
+            <Row label="Total imported"    value={fmtEnergy(data.e_total_imp as number).value} unit={fmtEnergy(data.e_total_imp as number).unit} color={T.imp}/>
           </div>
         </div>
       </div>

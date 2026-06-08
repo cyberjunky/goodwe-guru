@@ -95,6 +95,16 @@ In-container updates without a reinstall:
 
 ## Future work (planned)
 
+- **Sankey "Energy Flow" chart** (inspiration: SolarGo). Daily energy flows from
+  sources (Solar, Battery-discharge, Grid-import) → destinations (Load, Battery-charge,
+  Grid-export), each with kWh + %. Needs daily energy aggregation in the DB
+  (integrate power over the day, since ES lacks e_day_imp/exp counters). Likely a
+  recharts/custom Sankey on the History or a new "Flow" page.
+- Derive daily/total grid import & export by integrating `pgrid` over stored
+  snapshots — ES firmware does not expose `e_day_imp`/`e_day_exp`/`e_total_imp`/`e_total_exp`
+  (confirmed via sensor dump), so they read 0 unless we compute them.
+
+
 - BeagleBone RS485/CAN bridge for per-cell BMS data → `/ws/bms` endpoint already exists.
   Send JSON frames: `{"cell_voltages":[...],"temperatures":[...],"soc":N,...}`
   Keys are prefixed `bms_ext_*` and shown on Battery page.

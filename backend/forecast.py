@@ -94,7 +94,18 @@ def _num(x: Any) -> float:
         return 0.0
 
 
-async def fetch_forecast(fc: ForecastConfig) -> dict:
+def clear_cache():
+    """Drop cached forecast so the next fetch hits the API (e.g. after a config change)."""
+    _mem_cache.clear()
+    try:
+        _CACHE_FILE.unlink()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
+async def fetch_forecast(fc: ForecastConfig, force: bool = False) -> dict:
     """
     Returns merged forecast across all configured planes.
 
@@ -109,27 +120,29 @@ async def fetch_forecast(fc: ForecastConfig) -> dict:
     if not fc.enabled or not fc.planes:
         return {}
 
-    # Check memory cache
-    cache_key = f"{fc.lat}:{fc.lon}:{json.dumps(fc.planes)}"
-    cached = _mem_cache.get(cache_key)
-    if cached and time.time() - cached["fetched_at"] < _CACHE_TTL:
-        return cached
-
-    # Check disk cache (survives restarts within TTL)
-    if _CACHE_FILE.exists():
-        try:
-            disk = json.loads(_CACHE_FILE.read_text())
-            if time.time() - disk.get("fetched_at", 0) < _CACHE_TTL:
-                _mem_cache[cache_key] = disk
-                return disk
-        except Exception:
-            pass
+    # Cache is keyed on location + planes; honour it on disk too (a config change
+    # must invalidate the cache, otherwise re-saving returns the stale result).
+    cache_key = f"{_num(fc.lat)}:{_num(fc.lon)}:{json.dumps(fc.planes, sort_keys=True)}"
+    if not force:
+        cached = _mem_cache.get(cache_key)
+        if cached and time.time() - cached["fetched_at"] < _CACHE_TTL:
+            return cached
+        if _CACHE_FILE.exists():
+            try:
+                disk = json.loads(_CACHE_FILE.read_text())
+                if disk.get("cache_key") == cache_key and time.time() - disk.get("fetched_at", 0) < _CACHE_TTL:
+                    _mem_cache[cache_key] = disk
+                    return disk
+            except Exception:
+                pass
 
     merged_watts:     dict[str, float] = {}
     merged_wh_day:    dict[str, float] = {}
+    errors:           list[str]        = []
 
     async with httpx.AsyncClient(timeout=15) as client:
         for plane in fc.planes:
+            label = plane.get("label", "plane")
             url = (
                 f"https://api.forecast.solar/estimate"
                 f"/{_num(fc.lat)}/{_num(fc.lon)}"
@@ -139,7 +152,9 @@ async def fetch_forecast(fc: ForecastConfig) -> dict:
             try:
                 r = await client.get(url)
                 if r.status_code >= 400:
-                    log.warning("Forecast.Solar %s → %s: %s", url, r.status_code, r.text[:200])
+                    msg = f"HTTP {r.status_code}: {r.text[:160]}"
+                    log.warning("Forecast.Solar %s → %s", url, msg)
+                    errors.append(f"{label}: {msg}")
                 r.raise_for_status()
                 data = r.json()
                 result = data.get("result", {})
@@ -148,13 +163,16 @@ async def fetch_forecast(fc: ForecastConfig) -> dict:
                 for date, wh in result.get("watt_hours_day", {}).items():
                     merged_wh_day[date] = merged_wh_day.get(date, 0) + wh
             except Exception as e:
-                log.warning("Forecast.Solar fetch failed for plane %s: %s", plane.get("label"), e)
+                log.warning("Forecast.Solar fetch failed for plane %s: %s", label, e)
+                errors.append(f"{label}: {e}")
 
     result = {
         "watts":          merged_watts,
         "watt_hours_day": merged_wh_day,
         "fetched_at":     int(time.time()),
         "planes":         fc.planes,
+        "cache_key":      cache_key,
+        "errors":         errors,
     }
     _mem_cache[cache_key] = result
     try:

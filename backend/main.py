@@ -30,7 +30,7 @@ from auth import create_token, verify_token
 from config import settings as cfg
 from database import Database
 from tariffs import load_tariffs, save_tariffs, calc_financials
-from forecast import load_forecast_config, save_forecast_config, fetch_forecast, hourly_today, daily_forecast
+from forecast import load_forecast_config, save_forecast_config, fetch_forecast, hourly_today, daily_forecast, clear_cache as clear_forecast_cache
 from notifications import load_notification_config, save_notification_config, check_and_notify, send_telegram
 import automations as auto_engine
 
@@ -86,13 +86,9 @@ def normalise(data: dict) -> dict:
     if "backup_ptotal" not in d:
         d["backup_ptotal"] = d.get("pback_up") or 0
 
-    # ES e_total is already kWh; ET returns Wh — detect by model
-    # (inverter is the global Inverter object — check class name)
-    if inverter and inverter.__class__.__name__ == "ES":
-        # Convert kWh → Wh to match what the frontend expects for MWh display
-        for key in ("e_total", "e_load_total"):
-            if key in d and d[key] is not None:
-                d[key] = float(d[key]) * 1000
+    # Energy totals are presented to the frontend in kWh. ES already reports
+    # kWh, so NO scaling — the previous ×1000 made 234.6 kWh show as 234.6 MWh.
+    # (ET firmware reports Wh; if ET support is added, divide those by 1000 here.)
 
     # Grid direction. The frontend convention is: pgrid > 0 = importing,
     # pgrid < 0 = exporting. The ES reports grid power with the opposite sign
@@ -408,16 +404,18 @@ async def save_forecast_config_api(body: dict, _: str = Depends(require_auth)):
         if hasattr(fc, k):
             setattr(fc, k, v)
     save_forecast_config(fc)
+    clear_forecast_cache()   # config changed → force a fresh fetch next time
     return {"ok": True}
 
 @app.get("/api/forecast")
-async def get_forecast(_: str = Depends(require_auth)):
+async def get_forecast(force: bool = Query(False), _: str = Depends(require_auth)):
     fc   = load_forecast_config()
-    data = await fetch_forecast(fc)
+    data = await fetch_forecast(fc, force=force)
     return {
         "hourly_today": hourly_today(data),
         "daily":        daily_forecast(data),
         "fetched_at":   data.get("fetched_at"),
+        "errors":       data.get("errors", []),
         "configured":   fc.enabled,
     }
 

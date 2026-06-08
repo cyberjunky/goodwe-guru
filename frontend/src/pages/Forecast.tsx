@@ -13,6 +13,7 @@ interface ForecastResp {
   daily:        DayForecast[]
   fetched_at:   number | null
   configured:   boolean
+  errors?:      string[]
 }
 interface ForecastConfig {
   enabled:  boolean
@@ -207,6 +208,19 @@ export default function Forecast() {
       {!forecast?.configured && !showConfig && (
         <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 text-sm text-amber-300 text-center">
           Forecast not configured yet. Click <strong>Configure</strong> to enter your system details.
+        </div>
+      )}
+
+      {/* Fetch errors from Forecast.Solar (rate limit, bad coords, etc.) */}
+      {forecast?.errors && forecast.errors.length > 0 && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-sm text-red-300">
+          <div className="font-medium mb-1">Forecast.Solar returned an error:</div>
+          {forecast.errors.map((e, i) => (
+            <div key={i} className="text-xs font-mono text-red-300/90 break-words">{e}</div>
+          ))}
+          <div className="text-xs text-gray-500 mt-2">
+            Common causes: free-tier rate limit (try again in ~15 min), or invalid coordinates.
+          </div>
         </div>
       )}
 

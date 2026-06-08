@@ -1,5 +1,6 @@
 import { useInverter } from '../context/InverterContext'
 import StatCard from '../components/StatCard'
+import { fmtEnergy } from '../lib/format'
 import { Sun, TrendingUp } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
@@ -77,7 +78,7 @@ export default function Solar() {
         <StatCard label="Total PV Power" value={(data.ppv / 1000).toFixed(2)} unit="kW" color="text-amber-400" icon={<Sun size={14} />} />
         <StatCard label="Today" value={data.e_day?.toFixed(2) ?? '—'} unit="kWh" color="text-amber-300" />
         <StatCard label="This month" value="—" unit="kWh" />
-        <StatCard label="All-time" value={data.e_total ? (data.e_total / 1000).toFixed(1) : '—'} unit="MWh" icon={<TrendingUp size={14} />} />
+        <StatCard label="All-time" value={data.e_total ? fmtEnergy(data.e_total as number).value : '—'} unit={data.e_total ? fmtEnergy(data.e_total as number).unit : 'kWh'} icon={<TrendingUp size={14} />} />
       </div>
 
       {/* String cards */}
