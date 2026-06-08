@@ -6,7 +6,9 @@
       "Bash(git push *)",
       "Bash(git fetch *)",
       "Bash(bash -n /c/Users/ronkl/Development/goodwe-guru/update.sh)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(bash -n install.sh)",
+      "Bash(bash -n update.sh)"
     ]
   }
 }

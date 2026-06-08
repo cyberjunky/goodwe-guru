@@ -89,8 +89,9 @@ if ! $QUICK; then
   # ── Frontend rebuild ──────────────────────────────────────────────────────────
   info "Rebuilding frontend …"
   cd "$APP_DIR/frontend"
-  npm ci --silent
-  npm run build --silent
+  # No committed package-lock.json → npm ci would fail; fall back to npm install.
+  if [[ -f package-lock.json ]]; then npm ci --silent; else npm install --silent; fi
+  npm run build
   cd "$APP_DIR"
 else
   warn "--quick: skipping Python deps and frontend rebuild"

@@ -47,9 +47,9 @@ REPO_URL="${REPO_URL:-https://github.com/cyberjunky/goodwe-guru.git}"
 PASSWORD_GENERATED=false
 if [[ -z "${INVERTER_HOST:-}" ]]; then
   echo ""
-  echo -e "${YLW}╔══════════════════════════════════════════╗${NC}"
-  echo -e "${YLW}║      GoodWe Guru — Setup Wizard       ║${NC}"
-  echo -e "${YLW}╚══════════════════════════════════════════╝${NC}"
+  echo -e "${YLW}╔════════════════════════════════════════════╗${NC}"
+  echo -e "${YLW}║         GoodWe Guru — Setup Wizard         ║${NC}"
+  echo -e "${YLW}╚════════════════════════════════════════════╝${NC}"
   echo ""
 
   read -rp "  GoodWe inverter IP address         : " INVERTER_HOST
@@ -71,6 +71,9 @@ if [[ -z "${INVERTER_HOST:-}" ]]; then
   read -rp "  Domain for HTTPS (blank = IP-only)  : " DOMAIN
   if [[ -n "$DOMAIN" ]]; then
     read -rp "  Email for Let's Encrypt (blank=skip): " LE_EMAIL
+  else
+    read -rp "  Web port [80]                       : " HTTP_PORT
+    HTTP_PORT=${HTTP_PORT:-80}
   fi
 
   JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null \
@@ -161,6 +164,7 @@ EOF
     JWT_SECRET="$JWT_SECRET" \
     DOMAIN="${DOMAIN:-}" \
     LE_EMAIL="${LE_EMAIL:-}" \
+    HTTP_PORT="${HTTP_PORT:-80}" \
     NODE_MAJOR="$NODE_MAJOR" \
     APP_DIR="$APP_DIR" \
     DATA_DIR="$DATA_DIR" \
@@ -181,12 +185,13 @@ EOF
 
   LXC_IP=$(pct exec "$VMID" -- hostname -I 2>/dev/null | awk '{print $1}')
   echo ""
-  echo -e "${GRN}╔════════════════════════════════════════════════════╗${NC}"
-  echo -e "${GRN}║  GoodWe Guru installed successfully!            ║${NC}"
-  echo -e "${GRN}╚════════════════════════════════════════════════════╝${NC}"
+  echo -e "${GRN}╔════════════════════════════════════════════╗${NC}"
+  echo -e "${GRN}║    GoodWe Guru installed successfully!     ║${NC}"
+  echo -e "${GRN}╚════════════════════════════════════════════╝${NC}"
   echo ""
+  PORT_SFX=""; [[ "${HTTP_PORT:-80}" != 80 ]] && PORT_SFX=":${HTTP_PORT}"
   echo -e "  ${BLU}Container ID :${NC} $VMID"
-  echo -e "  ${BLU}Local URL    :${NC} http://${LXC_IP:-<container-ip>}"
+  echo -e "  ${BLU}Local URL    :${NC} http://${LXC_IP:-<container-ip>}${PORT_SFX}"
   [[ -n "${DOMAIN:-}" ]] && echo -e "  ${BLU}Secure URL   :${NC} https://$DOMAIN"
   echo -e "  ${BLU}Password     :${NC} ${APP_PASSWORD}"
   $PASSWORD_GENERATED && echo -e "               ${YLW}(auto-generated — save it now)${NC}"
@@ -278,7 +283,9 @@ ok "Python venv ready"
 # ── Build React frontend ──────────────────────────────────────────────────────
 info "Building frontend … (this is the heaviest step — needs ≥1.5 GB RAM)"
 cd "$APP_DIR/frontend"
-npm ci
+# Repo has no committed package-lock.json (it's .gitignored), and `npm ci`
+# requires one — fall back to `npm install`.
+if [[ -f package-lock.json ]]; then npm ci; else npm install; fi
 npm run build
 # A silent OOM-kill leaves no error but no dist either — fail loudly here.
 [[ -f "$APP_DIR/frontend/dist/index.html" ]] \
@@ -377,17 +384,20 @@ ok "Dashboard 'Update' button enabled"
 
 # ── UFW firewall ──────────────────────────────────────────────────────────────
 info "Configuring UFW firewall …"
+HTTP_PORT="${HTTP_PORT:-80}"
 ufw --force reset >/dev/null 2>&1
 ufw default deny incoming >/dev/null
 ufw default allow outgoing >/dev/null
-ufw allow ssh >/dev/null           # keep SSH open
-ufw allow 'Nginx Full' >/dev/null  # 80 + 443
+ufw allow ssh >/dev/null                       # keep SSH open
+ufw allow "${HTTP_PORT}/tcp" >/dev/null        # dashboard HTTP
+[[ -n "${DOMAIN:-}" ]] && ufw allow 443/tcp >/dev/null   # HTTPS when a domain is set
 ufw --force enable >/dev/null
-ok "UFW: only SSH (22) and Nginx Full (80/443) allowed inbound"
+ok "UFW: SSH (22) and dashboard port ${HTTP_PORT}$([[ -n "${DOMAIN:-}" ]] && echo ' + 443') allowed inbound"
 
 # ── nginx — rate-limited, hardened, with security headers ────────────────────
 info "Configuring nginx …"
 SERVER_NAME="${DOMAIN:-_}"
+HTTP_PORT="${HTTP_PORT:-80}"
 
 # Shared rate limit zone (defined at http level)
 # NOTE: no `server_tokens` here — Debian's nginx.conf already sets it, and a
@@ -406,8 +416,8 @@ EOF
 # working on the LAN.
 cat > "$NGINX_CONF" <<NGINX
 server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
+    listen ${HTTP_PORT} default_server;
+    listen [::]:${HTTP_PORT} default_server;
     server_name ${SERVER_NAME};
 
     include /etc/nginx/snippets/goodwe-proxy.conf;
@@ -561,11 +571,12 @@ ok "fail2ban configured (nginx brute-force protection active)"
 # ── Print summary ─────────────────────────────────────────────────────────────
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 echo ""
-echo -e "${GRN}╔════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GRN}║  GoodWe Guru installed successfully!               ║${NC}"
-echo -e "${GRN}╚════════════════════════════════════════════════════════╝${NC}"
+echo -e "${GRN}╔════════════════════════════════════════════╗${NC}"
+echo -e "${GRN}║    GoodWe Guru installed successfully!     ║${NC}"
+echo -e "${GRN}╚════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "  ${BLU}Local URL   :${NC} http://${IP}"
+PORT_SFX=""; [[ "${HTTP_PORT:-80}" != 80 ]] && PORT_SFX=":${HTTP_PORT}"
+echo -e "  ${BLU}Local URL   :${NC} http://${IP}${PORT_SFX}"
 [[ -n "${DOMAIN:-}" ]] && echo -e "  ${BLU}Secure URL  :${NC} https://${DOMAIN}"
 echo -e "  ${BLU}Password    :${NC} ${APP_PASSWORD:-<set in config.env>}"
 ${PASSWORD_GENERATED:-false} && echo -e "              ${YLW}(auto-generated — save it now)${NC}"
