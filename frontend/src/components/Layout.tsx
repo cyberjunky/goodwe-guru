@@ -6,6 +6,29 @@ import {
 } from 'lucide-react'
 import { useInverter } from '../context/InverterContext'
 
+/** Friendly smiling-sun brand mark (dark face on the amber chip). */
+function BrandSun({ size = 18 }: { size?: number }) {
+  const c = '#3a2400'
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <g stroke={c} strokeWidth="1.7" strokeLinecap="round">
+        {[0, 45, 90, 135, 180, 225, 270, 315].map(a => {
+          const r = (a * Math.PI) / 180
+          return (
+            <line key={a}
+              x1={12 + 8.2 * Math.cos(r)} y1={12 + 8.2 * Math.sin(r)}
+              x2={12 + 10.6 * Math.cos(r)} y2={12 + 10.6 * Math.sin(r)} />
+          )
+        })}
+      </g>
+      <circle cx="12" cy="12" r="6.6" stroke={c} strokeWidth="1.7" fill="none" />
+      <circle cx="9.7" cy="11" r="0.95" fill={c} />
+      <circle cx="14.3" cy="11" r="0.95" fill={c} />
+      <path d="M9.3 13.4 Q12 15.9 14.7 13.4" stroke={c} strokeWidth="1.6" strokeLinecap="round" fill="none" />
+    </svg>
+  )
+}
+
 const NAV = [
   { to: '/',          icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/solar',     icon: Sun,             label: 'Solar'     },
@@ -52,14 +75,14 @@ export default function Layout() {
         style={{ background: '#0a0f1e', borderColor: '#141f35' }}>
 
         {/* Logo */}
-        <div className="h-14 flex items-center px-3 lg:px-4 gap-3 border-b" style={{ borderColor: '#141f35' }}>
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-            style={{ background: 'linear-gradient(135deg, #e8950a 0%, #f0a820 100%)' }}>
-            <Sun size={15} className="text-gray-950" />
+        <div className="h-16 flex items-center justify-center lg:justify-start px-3 lg:px-4 gap-3 border-b" style={{ borderColor: '#141f35' }}>
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+            style={{ background: 'linear-gradient(135deg, #e8950a 0%, #f7b733 100%)', boxShadow: '0 2px 10px rgba(232,149,10,0.35)' }}>
+            <BrandSun size={20} />
           </div>
-          <div className="hidden lg:block">
-            <div className="text-[13px] font-semibold text-white leading-tight">GoodWe Guru</div>
-            <div className="text-[10px] text-gray-500 leading-tight">Solar Dashboard</div>
+          <div className="hidden lg:block leading-tight">
+            <div className="text-[15px] font-semibold text-white tracking-tight">GoodWe Guru</div>
+            <div className="text-[10px] text-amber-500/80 font-medium tracking-wide">Solar Dashboard</div>
           </div>
         </div>
 
@@ -92,11 +115,11 @@ export default function Layout() {
         <header className="md:hidden flex items-center justify-between h-12 px-4 border-b shrink-0"
           style={{ background: '#0a0f1e', borderColor: '#141f35' }}>
           <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center"
-              style={{ background: 'linear-gradient(135deg, #e8950a, #f0a820)' }}>
-              <Sun size={14} className="text-gray-950" />
+            <div className="w-8 h-8 rounded-xl flex items-center justify-center"
+              style={{ background: 'linear-gradient(135deg, #e8950a, #f7b733)' }}>
+              <BrandSun size={17} />
             </div>
-            <span className="font-semibold text-[13px] text-white">GoodWe Guru</span>
+            <span className="font-semibold text-[14px] text-white tracking-tight">GoodWe Guru</span>
           </div>
           <ConnectionChip />
         </header>

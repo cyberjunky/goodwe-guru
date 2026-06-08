@@ -108,6 +108,15 @@ async def send_telegram(nc: NotificationConfig, text: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+def fmt_power(w: float) -> str:
+    """Power as W below 1 kW, kW above — matches the dashboard formatting."""
+    a = abs(float(w or 0))
+    return f"{a / 1000:.2f} kW" if a >= 1000 else f"{round(a)} W"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Event state machine
 # ─────────────────────────────────────────────────────────────────────────────
 class NotificationState:
@@ -208,7 +217,7 @@ async def check_and_notify(data: dict[str, Any], daily_stats: dict[str, Any] | N
             _state.solar_active = True
             await send_telegram(nc,
                 f"☀️ <b>Solar production started</b>\n"
-                f"Current output: <b>{ppv/1000:.2f} kW</b>")
+                f"Current output: <b>{fmt_power(ppv)}</b>")
         elif not solar_on and _state.solar_active and now.hour >= 14:
             # Only send "stopped" in afternoon/evening
             _state.solar_active = False
@@ -223,8 +232,8 @@ async def check_and_notify(data: dict[str, Any], daily_stats: dict[str, Any] | N
             _state.high_import_sent_at = time.time()
             await send_telegram(nc,
                 f"📈 <b>High Grid Import Alert</b>\n"
-                f"Currently importing <b>{pgrid/1000:.2f} kW</b> from the grid\n"
-                f"(threshold: {nc.high_import_threshold_w/1000:.1f} kW)")
+                f"Currently importing <b>{fmt_power(pgrid)}</b> from the grid\n"
+                f"(threshold: {fmt_power(nc.high_import_threshold_w)})")
 
     # ── Daily summary ─────────────────────────────────────────────────────
     if nc.daily_summary_enabled and daily_stats:
