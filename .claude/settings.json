@@ -11,7 +11,9 @@
       "Bash(bash -n update.sh)",
       "Bash(git check-ignore *)",
       "Bash(python -m py_compile backend/main.py)",
-      "Bash(git update-index *)"
+      "Bash(git update-index *)",
+      "Bash(python -m py_compile backend/notifications.py)",
+      "Bash(python -m py_compile backend/forecast.py)"
     ]
   }
 }

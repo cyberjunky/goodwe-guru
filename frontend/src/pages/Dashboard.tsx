@@ -155,7 +155,7 @@ export default function Dashboard() {
             Dashboard
           </h1>
           <div style={{ fontSize:11, color:T.muted, marginTop:2 }}>
-            {String(data.work_mode_label??'—')} · {String(data.safety_country_label??'—')}
+            {[data.work_mode_label, data.grid_in_out_label].filter(Boolean).join(' · ') || '—'}
           </div>
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:6,

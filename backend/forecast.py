@@ -68,6 +68,14 @@ def load_forecast_config() -> ForecastConfig:
 
 
 def save_forecast_config(fc: ForecastConfig):
+    # Normalise numeric fields (frontend may send comma decimals or strings)
+    fc.lat = _num(fc.lat)
+    fc.lon = _num(fc.lon)
+    for p in fc.planes:
+        if isinstance(p, dict):
+            p["kwp"]     = _num(p.get("kwp", 0))
+            p["tilt"]    = int(_num(p.get("tilt", 0)))
+            p["azimuth"] = int(_num(p.get("azimuth", 0)))
     _CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     _CONFIG_FILE.write_text(json.dumps(asdict(fc), indent=2))
 
@@ -76,6 +84,14 @@ def save_forecast_config(fc: ForecastConfig):
 # Fetch + cache
 # ─────────────────────────────────────────────────────────────────────────────
 _mem_cache: dict[str, Any] = {}
+
+
+def _num(x: Any) -> float:
+    """Coerce to float, tolerating European decimal commas (e.g. '51,813297')."""
+    try:
+        return float(str(x).replace(",", ".").strip())
+    except (TypeError, ValueError):
+        return 0.0
 
 
 async def fetch_forecast(fc: ForecastConfig) -> dict:
@@ -116,12 +132,14 @@ async def fetch_forecast(fc: ForecastConfig) -> dict:
         for plane in fc.planes:
             url = (
                 f"https://api.forecast.solar/estimate"
-                f"/{fc.lat}/{fc.lon}"
-                f"/{plane['tilt']}/{plane['azimuth']}"
-                f"/{plane['kwp']}"
+                f"/{_num(fc.lat)}/{_num(fc.lon)}"
+                f"/{int(_num(plane['tilt']))}/{int(_num(plane['azimuth']))}"
+                f"/{_num(plane['kwp'])}"
             )
             try:
                 r = await client.get(url)
+                if r.status_code >= 400:
+                    log.warning("Forecast.Solar %s → %s: %s", url, r.status_code, r.text[:200])
                 r.raise_for_status()
                 data = r.json()
                 result = data.get("result", {})
