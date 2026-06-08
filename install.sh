@@ -121,11 +121,14 @@ if $ON_PROXMOX; then
   fi
 
   info "Creating hardened LXC $VMID …"
+  # NOTE: 2 GB RAM + 2 cores — the Vite frontend build OOM-kills at 512 MB
+  # (no error, just a silent SIGKILL). Runtime needs far less; lower it after
+  # the first install with:  pct set $VMID --memory 768 --cores 1
   pct create "$VMID" "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" \
     --hostname goodwe-guru \
-    --cores 1 \
-    --memory 512 \
-    --swap 256 \
+    --cores 2 \
+    --memory 2048 \
+    --swap 1024 \
     --storage "$STORAGE" \
     --rootfs "$STORAGE:4" \
     --net0 "name=eth0,bridge=vmbr0,ip=dhcp,firewall=1" \
@@ -273,10 +276,13 @@ python3 -m venv "$APP_DIR/.venv"
 ok "Python venv ready"
 
 # ── Build React frontend ──────────────────────────────────────────────────────
-info "Building frontend …"
+info "Building frontend … (this is the heaviest step — needs ≥1.5 GB RAM)"
 cd "$APP_DIR/frontend"
-npm ci --silent
-npm run build --silent
+npm ci
+npm run build
+# A silent OOM-kill leaves no error but no dist either — fail loudly here.
+[[ -f "$APP_DIR/frontend/dist/index.html" ]] \
+  || error "Frontend build produced no dist/ — usually out of memory. Give the LXC more RAM: pct set <id> --memory 2048"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR/frontend/dist"
 ok "Frontend built"
 
