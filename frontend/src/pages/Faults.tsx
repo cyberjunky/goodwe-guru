@@ -118,11 +118,7 @@ export default function Faults() {
             { label: 'Battery', value: data?.battery_temperature },
             { label: 'Max Cell', value: data?.battery_max_cell_temp },
             { label: 'Min Cell', value: data?.battery_min_cell_temp },
-          ]
-          // Only show sensors the inverter actually reports (ES omits air/module
-          // temps; cell temps need the BMS bridge) — avoids rows of "—".
-          .filter(t => typeof t.value === 'number' && !isNaN(t.value as number))
-          .map(t => {
+          ].map(t => {
             const v = t.value as number
             const warn = v !== undefined && v > 55
             return (
