@@ -1,0 +1,43 @@
+# ── Android APK / decompiled files (not part of the app) ─────────────────────
+*.apk
+*.xapk
+apk_assets/
+apk_extracted/
+
+# ── Frontend build artifacts ──────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+
+# ── Root-level dev tooling (not needed in repo) ───────────────────────────────
+node_modules/
+take-screenshots.js
+spa-server.js
+package.json
+package-lock.json
+
+# ── Python ────────────────────────────────────────────────────────────────────
+backend/__pycache__/
+backend/*.pyc
+backend/.venv/
+**/__pycache__/
+**/*.pyc
+
+# ── Runtime data (generated on the server) ────────────────────────────────────
+/data/
+*.db
+*.db-shm
+*.db-wal
+forecast_cache.json
+
+# ── Local secrets ─────────────────────────────────────────────────────────────
+config.env
+*.env
+*.env.local
+
+# ── Editors & OS ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
