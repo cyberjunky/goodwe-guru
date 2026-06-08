@@ -255,7 +255,7 @@ export default function EnergyFlow({ ppv, pbattery, pgrid, pload, soc }: Props) 
       </div>
 
       <div ref={containerRef}
-        style={{ position: 'relative', width: '100%', aspectRatio: `${W}/${H}` }}>
+        style={{ position: 'relative', width: '100%', maxWidth: 480, margin: '0 auto', aspectRatio: `${W}/${H}` }}>
         {/* Canvas: animated dots */}
         <canvas ref={canvasRef}
           style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }} />
