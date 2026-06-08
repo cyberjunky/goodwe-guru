@@ -362,7 +362,7 @@ Description=GoodWe Guru — apply update (triggered from dashboard)
 
 [Service]
 Type=oneshot
-Environment=APP_DIR=${APP_DIR} DATA_DIR=${DATA_DIR} SERVICE_NAME=${SERVICE_NAME} SERVICE_USER=${SERVICE_USER}
+Environment=HOME=/root APP_DIR=${APP_DIR} DATA_DIR=${DATA_DIR} SERVICE_NAME=${SERVICE_NAME} SERVICE_USER=${SERVICE_USER}
 ExecStart=${APP_DIR}/update.sh
 EOF
 

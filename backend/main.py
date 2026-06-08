@@ -9,6 +9,7 @@ BeagleBone RS485/CAN BMS bridge via /ws/bms.
 import asyncio
 import json
 import logging
+import re
 import subprocess
 import time
 import traceback
@@ -88,6 +89,21 @@ def normalise(data: dict) -> dict:
         for key in ("e_total", "e_load_total"):
             if key in d and d[key] is not None:
                 d[key] = float(d[key]) * 1000
+
+    # Grid direction. The frontend convention is: pgrid > 0 = importing,
+    # pgrid < 0 = exporting. The ES reports grid power with the opposite sign
+    # (negative while importing), which made the dashboard show "Export" during
+    # an import and animate the dots the wrong way. Prefer the inverter's own
+    # direction flag; fall back to flipping the sign on ES.
+    label = str(d.get("grid_in_out_label", "")).lower()
+    if d.get("pgrid") is not None:
+        p = float(d["pgrid"])
+        if "import" in label:
+            d["pgrid"] = abs(p)
+        elif "export" in label:
+            d["pgrid"] = -abs(p)
+        elif inverter and inverter.__class__.__name__ == "ES":
+            d["pgrid"] = -p
 
     # Missing counters → 0 so the UI shows 0.00 instead of "undefined"
     for key in ("e_day_imp", "e_day_exp", "e_total_imp", "e_total_exp",
@@ -301,6 +317,20 @@ async def get_update_status(_: str = Depends(require_auth)):
     if UPDATE_TRIGGER.exists() and st.get("state") not in ("running", "requested"):
         st = {"state": "requested"}
     return {"version": _git_version(), "update": st}
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+@app.get("/api/update/log")
+async def get_update_log(_: str = Depends(require_auth)):
+    log_path = DATA_DIR / "update.log"
+    if not log_path.exists():
+        return {"log": ""}
+    try:
+        text = _ANSI.sub("", log_path.read_text(errors="replace"))
+        return {"log": text[-8000:]}   # tail, ANSI stripped
+    except Exception as e:
+        return {"log": f"(could not read update.log: {e})"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

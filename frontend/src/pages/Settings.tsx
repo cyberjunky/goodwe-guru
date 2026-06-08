@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useInverter } from '../context/InverterContext'
-import { Settings as SettingsIcon, Save, RefreshCw, AlertCircle, Euro, Bell, Send, CheckCircle2, DownloadCloud, GitCommit, Server } from 'lucide-react'
+import { Settings as SettingsIcon, Save, RefreshCw, AlertCircle, Euro, Bell, Send, CheckCircle2, DownloadCloud, GitCommit, Server, FileText } from 'lucide-react'
 
 const WORK_MODES = [
   { value: 0, label: 'General Mode', desc: 'Standard grid-tied — charges from PV, exports excess' },
@@ -392,6 +392,15 @@ function SystemSettings() {
   const [state, setState] = useState<UpdateState>('idle')
   const [message, setMessage] = useState('')
   const [busy, setBusy]   = useState(false)
+  const [logText, setLogText] = useState('')
+  const [showLog, setShowLog] = useState(false)
+
+  async function loadLog() {
+    try {
+      const r = await fetch('/api/update/log', { headers })
+      if (r.ok) { const j = await r.json(); setLogText(j.log || '(empty)'); setShowLog(true) }
+    } catch { /* ignore */ }
+  }
 
   async function refresh() {
     try {
@@ -470,13 +479,23 @@ function SystemSettings() {
         )}
         {state === 'failed' && (
           <div className="flex items-center gap-2 text-sm text-red-400">
-            <AlertCircle size={15} /> Update failed{message ? ` — ${message}` : ''}. Check <span className="font-mono">update.log</span>.
+            <AlertCircle size={15} /> Update failed{message ? ` — ${message}` : ''}.
           </div>
         )}
         {busyState && (
           <div className="text-xs text-gray-500">
             Working… this can take 1–2 minutes. The page may briefly disconnect — it will reconnect automatically.
           </div>
+        )}
+
+        <button onClick={() => showLog ? setShowLog(false) : loadLog()}
+          className="flex items-center gap-2 text-xs text-gray-400 hover:text-gray-200 transition-colors">
+          <FileText size={13} /> {showLog ? 'Hide' : 'View'} update log
+        </button>
+        {showLog && (
+          <pre className="bg-black/40 border border-gray-800 rounded-lg p-3 text-[11px] leading-snug text-gray-300 overflow-auto max-h-80 whitespace-pre-wrap">
+            {logText || '(no log yet)'}
+          </pre>
         )}
       </div>
     </div>

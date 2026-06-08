@@ -25,6 +25,12 @@ TRIGGER="$DATA_DIR/.update-request"
 STATUS="$DATA_DIR/.update-status.json"
 LOG="$DATA_DIR/update.log"
 
+# Running as root (systemd unit) against a goodwe-owned repo triggers git's
+# "dubious ownership" guard. The systemd service has no HOME/gitconfig, so set
+# both here — otherwise every GUI-triggered update fails at `git pull`.
+export HOME="${HOME:-/root}"
+git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
+
 # ── Status file (read by the dashboard's Update button) ────────────────────────
 _status() { # state [message]
   [[ -d "$DATA_DIR" ]] || return 0

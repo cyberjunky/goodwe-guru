@@ -8,7 +8,9 @@
       "Bash(bash -n /c/Users/ronkl/Development/goodwe-guru/update.sh)",
       "Bash(npx tsc *)",
       "Bash(bash -n install.sh)",
-      "Bash(bash -n update.sh)"
+      "Bash(bash -n update.sh)",
+      "Bash(git check-ignore *)",
+      "Bash(python -m py_compile backend/main.py)"
     ]
   }
 }
