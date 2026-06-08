@@ -10,7 +10,8 @@
       "Bash(bash -n install.sh)",
       "Bash(bash -n update.sh)",
       "Bash(git check-ignore *)",
-      "Bash(python -m py_compile backend/main.py)"
+      "Bash(python -m py_compile backend/main.py)",
+      "Bash(git update-index *)"
     ]
   }
 }

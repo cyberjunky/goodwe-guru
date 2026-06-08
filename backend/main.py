@@ -76,9 +76,13 @@ def normalise(data: dict) -> dict:
       house_consumption    → load_ptotal fallback
     """
     d = dict(data)
-    # Load power normalisation
+    # Load power normalisation.
+    # Prefer `house_consumption` (true total house load = PV + grid import +
+    # battery discharge) over `plant_power` (just the inverter's AC output).
+    # Using plant_power made the energy-flow diagram not balance — e.g. grid 814
+    # + PV 24 came in but Home showed only ~705.
     if "load_ptotal" not in d:
-        d["load_ptotal"] = d.get("plant_power") or d.get("pload") or d.get("house_consumption") or 0
+        d["load_ptotal"] = d.get("house_consumption") or d.get("pload") or d.get("plant_power") or 0
     if "backup_ptotal" not in d:
         d["backup_ptotal"] = d.get("pback_up") or 0
 

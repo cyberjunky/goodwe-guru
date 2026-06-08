@@ -13,7 +13,9 @@ Key platform constraints — always keep these in mind:
 - **Peak Shaving mode (4)** is also unsupported on ES.
 - Supported work modes on ES: 0=General, 1=Off-Grid, 2=Backup, 3=Eco (+ emulated ECO Charge/Discharge).
 - ES uses AA55 protocol (not Modbus TCP). The goodwe library handles this transparently.
-- ES field names differ from ET: `pload`/`plant_power` → normalised to `load_ptotal` in `backend/normalise()`.
+- ES field names differ from ET: home load → normalised to `load_ptotal` in `backend/normalise()`,
+  preferring `house_consumption` (PV+grid+bat, balances the flow diagram) over `plant_power` (inverter AC output).
+- ES grid power sign is inverted vs the frontend (import>0/export<0); `normalise()` fixes it via `grid_in_out_label`.
 - `e_total` on ES is already in kWh; ET returns Wh — normalise() handles the scaling.
 - The Settings page hides EMS modes when `platform === 'ES'` (detected via `/api/status`).
 
