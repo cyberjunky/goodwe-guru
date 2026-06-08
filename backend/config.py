@@ -6,8 +6,14 @@ or the /data/goodwe-monitor/config.env file that the Proxmox install script crea
 import os
 from pathlib import Path
 
-_env_file = Path("/data/goodwe-monitor/config.env")
-if _env_file.exists():
+_env_file = next(
+    (p for p in [
+        Path(__file__).parent.parent / "data" / "config.env",   # project/data/config.env
+        Path("/data/goodwe-monitor/config.env"),                  # Linux/Proxmox
+    ] if p.exists()),
+    None,
+)
+if _env_file and _env_file.exists():
     for line in _env_file.read_text().splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
@@ -21,7 +27,10 @@ class Settings:
     password: str = os.environ.get("APP_PASSWORD", "changeme")
     jwt_secret: str = os.environ.get("JWT_SECRET", "change-this-secret-in-production")
     jwt_expire_days: int = int(os.environ.get("JWT_EXPIRE_DAYS", "30"))
-    db_path: str = os.environ.get("DB_PATH", "/data/goodwe-monitor/history.db")
+    db_path: str = os.environ.get(
+        "DB_PATH",
+        str(Path(__file__).parent.parent / "data" / "history.db")
+    )
 
 
 settings = Settings()

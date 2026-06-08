@@ -9,9 +9,9 @@ BeagleBone RS485/CAN BMS bridge via /ws/bms.
 import asyncio
 import json
 import logging
+import traceback
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -26,18 +26,9 @@ from pydantic import BaseModel
 from auth import create_token, verify_token
 from config import settings as cfg
 from database import Database
-from tariffs import (
-    TariffConfig, load_tariffs, save_tariffs,
-    calc_financials, current_import_rate,
-)
-from forecast import (
-    ForecastConfig, load_forecast_config, save_forecast_config,
-    fetch_forecast, hourly_today, daily_forecast,
-)
-from notifications import (
-    NotificationConfig, load_notification_config, save_notification_config,
-    check_and_notify, send_telegram,
-)
+from tariffs import load_tariffs, save_tariffs, calc_financials
+from forecast import load_forecast_config, save_forecast_config, fetch_forecast, hourly_today, daily_forecast
+from notifications import load_notification_config, save_notification_config, check_and_notify, send_telegram
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -50,7 +41,7 @@ latest_data: dict        = {}
 bms_data: dict           = {}
 ws_clients: set[WebSocket] = set()
 
-db = Database()
+db: Database   # initialised inside lifespan, not at import time
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,27 +60,74 @@ async def connect_inverter():
             await asyncio.sleep(10)
 
 
+def normalise(data: dict) -> dict:
+    """
+    Normalise platform differences so the frontend sees consistent field names.
+
+    ES (platform 105) differences vs ET (platform 745):
+      pload / plant_power  → load_ptotal
+      pback_up             → backup_ptotal
+      e_total is kWh       → ET stores as Wh, multiply ES by 1000 to match
+      no e_day_imp / e_day_exp / e_load_day on older firmware → set to 0
+      house_consumption    → load_ptotal fallback
+    """
+    d = dict(data)
+    # Load power normalisation
+    if "load_ptotal" not in d:
+        d["load_ptotal"] = d.get("plant_power") or d.get("pload") or d.get("house_consumption") or 0
+    if "backup_ptotal" not in d:
+        d["backup_ptotal"] = d.get("pback_up") or 0
+
+    # ES e_total is already kWh; ET returns Wh — detect by model
+    # (inverter is the global Inverter object — check class name)
+    if inverter and inverter.__class__.__name__ == "ES":
+        # Convert kWh → Wh to match what the frontend expects for MWh display
+        for key in ("e_total", "e_load_total"):
+            if key in d and d[key] is not None:
+                d[key] = float(d[key]) * 1000
+
+    # Missing counters → 0 so the UI shows 0.00 instead of "undefined"
+    for key in ("e_day_imp", "e_day_exp", "e_total_imp", "e_total_exp",
+                "e_bat_charge_day", "e_bat_discharge_day",
+                "e_bat_charge_total", "e_bat_discharge_total"):
+        d.setdefault(key, 0)
+
+    return d
+
+
 async def poll_inverter():
     global latest_data
     await connect_inverter()
+    await asyncio.sleep(3)
+    consecutive_errors = 0
     while True:
         try:
             raw  = await inverter.read_runtime_data()
             data = {str(k): (v.value if hasattr(v, "value") else v) for k, v in raw.items()}
+            data = normalise(data)
             data.update(bms_data)
             latest_data = data
-            db.insert_snapshot(data)
-            await broadcast({"type": "data", "payload": data})
-
-            # Telegram notifications (non-blocking)
-            today_stats = db.get_today_summary()
-            asyncio.create_task(check_and_notify(data, today_stats))
-
+            consecutive_errors = 0
         except Exception as e:
-            log.warning("Poll error: %s", e)
-            await asyncio.sleep(5)
-            await connect_inverter()
+            consecutive_errors += 1
+            log.warning("Poll error #%d: %s\n%s", consecutive_errors, e, traceback.format_exc())
+            backoff = min(5 * (2 ** min(consecutive_errors - 1, 3)), 30)
+            await asyncio.sleep(backoff)
+            if consecutive_errors >= 3:
+                log.info("Reconnecting after 3 errors …")
+                await connect_inverter()
+                await asyncio.sleep(3)
+                consecutive_errors = 0
             continue
+
+        # Always broadcast live data — DB write is best-effort
+        await broadcast({"type": "data", "payload": latest_data})
+        try:
+            db.insert_snapshot(latest_data)
+            asyncio.create_task(check_and_notify(latest_data, db.get_today_summary()))
+        except Exception as db_err:
+            log.warning("DB write skipped: %s\n%s", db_err, traceback.format_exc())
+
         await asyncio.sleep(cfg.poll_interval)
 
 
@@ -107,7 +145,9 @@ async def broadcast(msg: dict):
 # Lifespan
 # ─────────────────────────────────────────────────────────────────────────────
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
+    global db
+    db = Database()
     db.migrate()
     asyncio.create_task(poll_inverter())
     yield
@@ -184,9 +224,11 @@ async def get_history(range: str = Query("7d"), _: str = Depends(require_auth)):
 @app.get("/api/status")
 async def get_status(_: str = Depends(require_auth)):
     return {
-        "inverter": inverter.model_name   if inverter else None,
-        "serial":   inverter.serial_number if inverter else None,
-        "data":     latest_data,
+        "inverter":  inverter.model_name    if inverter else None,
+        "serial":    inverter.serial_number if inverter else None,
+        "platform":  inverter.__class__.__name__ if inverter else None,
+        "arm_fw":    getattr(inverter, "arm_firmware", None) if inverter else None,
+        "data":      latest_data,
     }
 
 
