@@ -68,8 +68,10 @@ if [[ -z "${INVERTER_HOST:-}" ]]; then
   read -rp "  Poll interval in seconds [10]       : " POLL_INTERVAL
   POLL_INTERVAL=${POLL_INTERVAL:-10}
 
-  read -rp "  Domain/subdomain for HTTPS          : " DOMAIN
-  read -rp "  (leave blank to use IP-only / HTTP)   "
+  read -rp "  Domain for HTTPS (blank = IP-only)  : " DOMAIN
+  if [[ -n "$DOMAIN" ]]; then
+    read -rp "  Email for Let's Encrypt (blank=skip): " LE_EMAIL
+  fi
 
   JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null \
                || openssl rand -hex 32)
@@ -144,21 +146,29 @@ EOF
   sleep 8
   info "LXC $VMID started. Running install inside container …"
 
-  # Export all vars needed inside the container, then exec this same script
-  pct exec "$VMID" -- bash -c "
-    export INVERTER_HOST='$INVERTER_HOST'
-    export APP_PASSWORD='$APP_PASSWORD'
-    export POLL_INTERVAL='$POLL_INTERVAL'
-    export JWT_SECRET='$JWT_SECRET'
-    export DOMAIN='${DOMAIN:-}'
-    export NODE_MAJOR=$NODE_MAJOR
-    export APP_DIR='$APP_DIR'
-    export DATA_DIR='$DATA_DIR'
-    export SERVICE_USER='$SERVICE_USER'
-    export SERVICE_NAME='$SERVICE_NAME'
-    export NGINX_CONF='$NGINX_CONF'
-    export REPO_URL='$REPO_URL'
-    bash -s" < "$0"
+  # Copy this script INTO the container and run it as a real file.
+  # (Do NOT pipe via `bash -s < "$0"`: that makes stdin the script itself, so
+  #  apt/npm/curl reading stdin desync execution — symptom: "info: command not found".)
+  SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+  [[ -f "$SCRIPT_PATH" ]] || error "Cannot locate this script to copy into the container. Clone the repo and run 'bash install.sh' (not via process substitution)."
+  pct push "$VMID" "$SCRIPT_PATH" /root/goodwe-install.sh --perms 755
+
+  pct exec "$VMID" -- env \
+    INVERTER_HOST="$INVERTER_HOST" \
+    APP_PASSWORD="$APP_PASSWORD" \
+    POLL_INTERVAL="$POLL_INTERVAL" \
+    JWT_SECRET="$JWT_SECRET" \
+    DOMAIN="${DOMAIN:-}" \
+    LE_EMAIL="${LE_EMAIL:-}" \
+    NODE_MAJOR="$NODE_MAJOR" \
+    APP_DIR="$APP_DIR" \
+    DATA_DIR="$DATA_DIR" \
+    SERVICE_USER="$SERVICE_USER" \
+    SERVICE_NAME="$SERVICE_NAME" \
+    NGINX_CONF="$NGINX_CONF" \
+    REPO_URL="$REPO_URL" \
+    LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    bash /root/goodwe-install.sh
 
   LXC_IP=$(pct exec "$VMID" -- hostname -I 2>/dev/null | awk '{print $1}')
   echo ""
@@ -204,8 +214,10 @@ fi
 ok "Node $(node --version)"
 
 # ── Service user ──────────────────────────────────────────────────────────────
+# No -m: creating $APP_DIR here (with /etc/skel files) makes the later
+# `git clone` fail with "destination path already exists and is not empty".
 id "$SERVICE_USER" &>/dev/null \
-  || useradd -r -s /usr/sbin/nologin -m -d "$APP_DIR" "$SERVICE_USER"
+  || useradd -r -s /usr/sbin/nologin -M -d "$APP_DIR" "$SERVICE_USER"
 
 # ── Data directory ────────────────────────────────────────────────────────────
 mkdir -p "$DATA_DIR"
@@ -230,6 +242,8 @@ if [[ -d "$APP_DIR/.git" ]]; then
   info "Updating existing install …"
   git -C "$APP_DIR" pull --ff-only
 else
+  # Clear any non-git leftovers (e.g. a stale skel-populated dir from a prior run)
+  [[ -d "$APP_DIR" ]] && rm -rf "$APP_DIR"
   info "Cloning GoodWe Guru …"
   git clone "$REPO_URL" "$APP_DIR"
 fi
@@ -323,34 +337,27 @@ info "Configuring nginx …"
 SERVER_NAME="${DOMAIN:-_}"
 
 # Shared rate limit zone (defined at http level)
+# NOTE: no `server_tokens` here — Debian's nginx.conf already sets it, and a
+# second definition makes `nginx -t` fail with "directive is duplicate".
 cat > /etc/nginx/conf.d/goodwe-limits.conf <<'EOF'
 # Rate limiting — prevents brute-force against login endpoint
 limit_req_zone  $binary_remote_addr zone=login:10m  rate=5r/m;
 limit_req_zone  $binary_remote_addr zone=api:10m    rate=60r/m;
 limit_req_zone  $binary_remote_addr zone=ws:10m     rate=10r/m;
 limit_conn_zone $binary_remote_addr zone=addr:10m;
-
-# Hide nginx version
-server_tokens off;
 EOF
 
+# Port 80 ALWAYS serves the app directly (so the internal IP works), and is the
+# default_server for any host. When a domain + cert exist we ADD a 443 block
+# below; we deliberately do NOT 301-redirect 80→443, so IP-only access keeps
+# working on the LAN.
 cat > "$NGINX_CONF" <<NGINX
-# HTTP — redirect to HTTPS if domain is set, otherwise serve directly
 server {
-    listen 80;
-    listen [::]:80;
+    listen 80 default_server;
+    listen [::]:80 default_server;
     server_name ${SERVER_NAME};
 
-$(if [[ -n "${DOMAIN:-}" ]]; then
-cat <<REDIRECT
-    # Redirect all HTTP to HTTPS
-    return 301 https://\$host\$request_uri;
-REDIRECT
-else
-cat <<DIRECT
     include /etc/nginx/snippets/goodwe-proxy.conf;
-DIRECT
-fi)
 }
 NGINX
 
@@ -427,11 +434,13 @@ nginx -t && systemctl reload nginx
 ok "nginx configured with rate limiting and security headers"
 
 # ── Let's Encrypt ────────────────────────────────────────────────────────────
-if [[ -n "${DOMAIN:-}" ]]; then
+if [[ -n "${DOMAIN:-}" && -z "${LE_EMAIL:-}" ]]; then
+  warn "No Let's Encrypt email provided — skipping HTTPS. App is reachable over HTTP."
+elif [[ -n "${DOMAIN:-}" ]]; then
   info "Obtaining Let's Encrypt certificate for $DOMAIN …"
-  read -rp "  Email for Let's Encrypt renewal notices: " LE_EMAIL
-
-  if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$LE_EMAIL"; then
+  # certbot needs port 80 reachable from the internet for this domain; on a
+  # purely internal LAN this will fail and we fall back to HTTP (IP still works).
+  if certbot certonly --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$LE_EMAIL"; then
 
     # Append HTTPS server block with HSTS
     cat >> "$NGINX_CONF" <<NGINX_HTTPS
