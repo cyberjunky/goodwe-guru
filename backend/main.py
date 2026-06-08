@@ -29,6 +29,7 @@ from database import Database
 from tariffs import load_tariffs, save_tariffs, calc_financials
 from forecast import load_forecast_config, save_forecast_config, fetch_forecast, hourly_today, daily_forecast
 from notifications import load_notification_config, save_notification_config, check_and_notify, send_telegram
+import automations as auto_engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -150,6 +151,10 @@ async def lifespan(_app: FastAPI):
     db = Database()
     db.migrate()
     asyncio.create_task(poll_inverter())
+    asyncio.create_task(auto_engine.run_loop(
+        get_data=lambda: latest_data,
+        get_inverter=lambda: inverter,
+    ))
     yield
     db.close()
 
@@ -392,6 +397,211 @@ async def ws_bms(websocket: WebSocket, token: str = Query(...)):
         log.error("BMS WS error: %s", e)
     finally:
         bms_data.clear()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Automations API
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/automations")
+async def get_automations(_: str = Depends(require_auth)):
+    return [asdict(a) for a in auto_engine.load()]
+
+@app.post("/api/automations")
+async def create_automation(body: dict, _: str = Depends(require_auth)):
+    autos = auto_engine.load()
+    a = auto_engine.Automation()
+    a.id = auto_engine._next_id(autos)
+    for k, v in body.items():
+        if hasattr(a, k) and k != "id":
+            setattr(a, k, v)
+    autos.append(a)
+    auto_engine.save(autos)
+    return asdict(a)
+
+@app.put("/api/automations/{aid}")
+async def update_automation(aid: str, body: dict, _: str = Depends(require_auth)):
+    autos = auto_engine.load()
+    for a in autos:
+        if a.id == aid:
+            for k, v in body.items():
+                if hasattr(a, k) and k not in ("id", "last_triggered", "trigger_count"):
+                    setattr(a, k, v)
+            auto_engine.save(autos)
+            return asdict(a)
+    raise HTTPException(404, "Not found")
+
+@app.delete("/api/automations/{aid}")
+async def delete_automation(aid: str, _: str = Depends(require_auth)):
+    autos = auto_engine.load()
+    autos = [a for a in autos if a.id != aid]
+    auto_engine.save(autos)
+    return {"ok": True}
+
+@app.post("/api/automations/{aid}/trigger")
+async def trigger_automation(aid: str, _: str = Depends(require_auth)):
+    """Manually fire an automation once regardless of conditions."""
+    autos = auto_engine.load()
+    for a in autos:
+        if a.id == aid:
+            results = []
+            for act in a.actions:
+                try:
+                    r = await auto_engine.execute(act, inverter)
+                    results.append(r)
+                except Exception as e:
+                    results.append(f"error: {e}")
+            return {"ok": True, "results": results}
+    raise HTTPException(404, "Not found")
+
+@app.get("/api/automations/templates")
+async def get_templates(_: str = Depends(require_auth)):
+    return auto_engine.TEMPLATES
+
+@app.post("/api/automations/from-template")
+async def create_from_template(body: dict, _: str = Depends(require_auth)):
+    """
+    Instantiate one or more automations from a template.
+    body: { template_id, params: { key: value, ... } }
+    """
+    tid    = body.get("template_id", "")
+    params = body.get("params", {})
+
+    tpl = next((t for t in auto_engine.TEMPLATES if t["id"] == tid), None)
+    if not tpl:
+        raise HTTPException(404, f"Template '{tid}' not found")
+
+    autos   = auto_engine.load()
+    created = []
+
+    def make(name, description, logic, conditions, actions, cooldown):
+        a = auto_engine.Automation(
+            id=auto_engine._next_id(autos + created),
+            name=name, description=description,
+            logic=logic, conditions=conditions, actions=actions,
+            cooldown=cooldown,
+        )
+        return a
+
+    if tid == "tpl_self_use":
+        max_soc      = int(params.get("max_soc", 90))
+        min_soc      = int(params.get("min_soc", 20))
+        cdwn         = int(params.get("cooldown", 10))
+        export_limit = int(params.get("export_limit", 6000))
+
+        created.append(make(
+            "Zero export (battery priority)",
+            f"Export=0 while SoC<{max_soc}% so solar charges battery first",
+            "AND",
+            [{"sensor":"battery_soc","op":"lt","value":max_soc,"value2":0}],
+            [{"type":"write_setting","setting":"grid_export_limit","value":0,"message":""}],
+            cdwn,
+        ))
+        created.append(make(
+            f"Restore export when battery ≥{max_soc}%",
+            "Re-enable grid export once battery is full",
+            "AND",
+            [{"sensor":"battery_soc","op":"gte","value":max_soc,"value2":0}],
+            [{"type":"write_setting","setting":"grid_export_limit","value":export_limit,"message":""},
+             {"type":"set_general_mode","setting":"","value":None,"message":""}],
+            cdwn,
+        ))
+        created.append(make(
+            f"Min SoC floor ≥{min_soc}%",
+            f"Start ECO charge when SoC drops below {min_soc}%",
+            "AND",
+            [{"sensor":"battery_soc","op":"lte","value":min_soc,"value2":0}],
+            [{"type":"eco_charge","setting":"","value":None,"message":""},
+             {"type":"notify","setting":"","value":None,
+              "message":f"🔋 Battery below {min_soc}% — ECO charge started"}],
+            cdwn,
+        ))
+        created.append(make(
+            f"Stop ECO charge when full ≥{max_soc}%",
+            "Switch back to General mode once battery is charged",
+            "AND",
+            [{"sensor":"battery_soc","op":"gte","value":max_soc,"value2":0}],
+            [{"type":"set_general_mode","setting":"","value":None,"message":""},
+             {"type":"notify","setting":"","value":None,
+              "message":f"✅ Battery at {max_soc}% — back to General/Self-Use mode"}],
+            cdwn,
+        ))
+
+    elif tid == "tpl_smart_self_use":
+        max_soc      = int(params.get("max_soc", 90))
+        min_soc      = int(params.get("min_soc", 20))
+        eve_target   = int(params.get("evening_target", 85))
+        export_limit = int(params.get("export_limit", 6000))
+
+        created.append(make(
+            "Zero export → battery first",
+            f"No grid export while SoC<{max_soc}%",
+            "AND",
+            [{"sensor":"battery_soc","op":"lt","value":max_soc,"value2":0}],
+            [{"type":"write_setting","setting":"grid_export_limit","value":0,"message":""}],
+            10,
+        ))
+        created.append(make(
+            f"Restore export at {max_soc}%",
+            "Re-enable export when battery full",
+            "AND",
+            [{"sensor":"battery_soc","op":"gte","value":max_soc,"value2":0}],
+            [{"type":"write_setting","setting":"grid_export_limit","value":export_limit,"message":""},
+             {"type":"set_general_mode","setting":"","value":None,"message":""}],
+            10,
+        ))
+        created.append(make(
+            f"Min SoC floor {min_soc}% (night reserve)",
+            "ECO charge if battery drops too low",
+            "AND",
+            [{"sensor":"battery_soc","op":"lte","value":min_soc,"value2":0}],
+            [{"type":"eco_charge","setting":"","value":None,"message":""},
+             {"type":"notify","setting":"","value":None,
+              "message":f"⚠️ SoC below {min_soc}% — charging started"}],
+            10,
+        ))
+        created.append(make(
+            f"Pre-evening boost (target {eve_target}%)",
+            f"ECO charge if battery below {eve_target}% before evening",
+            "AND",
+            [{"sensor":"battery_soc","op":"lt","value":eve_target,"value2":0}],
+            [{"type":"eco_charge","setting":"","value":None,"message":""},
+             {"type":"notify","setting":"","value":None,
+              "message":f"☀️ Pre-evening charge — target {eve_target}% before dark"}],
+            120,
+        ))
+
+    else:
+        # Generic single automation from template
+        a = make(
+            params.get("name", tpl.get("name", "Automation")),
+            tpl.get("description", ""),
+            tpl.get("logic", "AND"),
+            tpl.get("conditions", []),
+            tpl.get("actions", []),
+            tpl.get("cooldown", 5),
+        )
+        # Apply param overrides to nested structures
+        for tp in tpl.get("params", []):
+            val = params.get(tp["key"].split(".")[-1], tp.get("default"))
+            key = tp["key"]
+            if key.startswith("conditions."):
+                parts = key.split(".")
+                idx   = int(parts[1])
+                field = parts[2]
+                if idx < len(a.conditions):
+                    a.conditions[idx][field] = val
+            elif key.startswith("actions."):
+                parts = key.split(".")
+                idx   = int(parts[1])
+                field = parts[2]
+                if idx < len(a.actions):
+                    a.actions[idx][field] = val
+        created.append(a)
+
+    autos.extend(created)
+    auto_engine.save(autos)
+    return [asdict(c) for c in created]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

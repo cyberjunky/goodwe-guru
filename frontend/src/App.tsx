@@ -13,6 +13,7 @@ import Faults from './pages/Faults'
 import Login from './pages/Login'
 import Finance from './pages/Finance'
 import Forecast from './pages/Forecast'
+import Automations from './pages/Automations'
 
 const DEMO = new URLSearchParams(window.location.search).has('demo')
 
@@ -27,8 +28,9 @@ function AppRoutes() {
           <Route path="grid"     element={<Grid />} />
           <Route path="history"  element={<History />} />
           <Route path="finance"  element={<Finance />} />
-          <Route path="forecast" element={<Forecast />} />
-          <Route path="settings" element={<Settings />} />
+          <Route path="forecast"     element={<Forecast />} />
+          <Route path="automations" element={<Automations />} />
+          <Route path="settings"    element={<Settings />} />
           <Route path="faults"   element={<Faults />} />
         </Route>
       </Routes>
