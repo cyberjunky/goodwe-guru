@@ -146,13 +146,11 @@ EOF
   sleep 8
   info "LXC $VMID started. Running install inside container …"
 
-  # Copy this script INTO the container and run it as a real file.
-  # (Do NOT pipe via `bash -s < "$0"`: that makes stdin the script itself, so
-  #  apt/npm/curl reading stdin desync execution — symptom: "info: command not found".)
-  SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
-  [[ -f "$SCRIPT_PATH" ]] || error "Cannot locate this script to copy into the container. Clone the repo and run 'bash install.sh' (not via process substitution)."
-  pct push "$VMID" "$SCRIPT_PATH" /root/goodwe-install.sh --perms 755
-
+  # Run the installer INSIDE the container by cloning the repo there. This works
+  # whether THIS script was launched from a file or piped via process
+  # substitution (bash <(curl …)) — in the latter case $0 is a pipe we can't copy.
+  # (Do NOT pipe the script via `bash -s < "$0"`: that makes stdin the script
+  #  itself, so apt/npm/curl reading stdin desync execution.)
   pct exec "$VMID" -- env \
     INVERTER_HOST="$INVERTER_HOST" \
     APP_PASSWORD="$APP_PASSWORD" \
@@ -168,7 +166,15 @@ EOF
     NGINX_CONF="$NGINX_CONF" \
     REPO_URL="$REPO_URL" \
     LANG=C.UTF-8 LC_ALL=C.UTF-8 \
-    bash /root/goodwe-install.sh
+    bash -c '
+      set -euo pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y -qq git >/dev/null
+      rm -rf /root/goodwe-guru-src
+      git clone --depth 1 "$REPO_URL" /root/goodwe-guru-src
+      exec bash /root/goodwe-guru-src/install.sh
+    '
 
   LXC_IP=$(pct exec "$VMID" -- hostname -I 2>/dev/null | awk '{print $1}')
   echo ""
