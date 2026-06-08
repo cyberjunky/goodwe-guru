@@ -146,7 +146,7 @@ export default function Dashboard() {
   }))
 
   return (
-    <div style={{ padding:'18px 20px', display:'flex', flexDirection:'column', gap:12, maxWidth:1400, boxSizing:'border-box' }}>
+    <div style={{ padding:'16px 20px', display:'flex', flexDirection:'column', gap:12, boxSizing:'border-box' }}>
 
       {/* ── Header ─────────────────────────────────────────────────── */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>

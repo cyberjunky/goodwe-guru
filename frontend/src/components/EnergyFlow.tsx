@@ -110,11 +110,13 @@ function HomeIcon({ c }: { c: string }) {
 
 // ── Component ────────────────────────────────────────────────────────────────
 export default function EnergyFlow({ ppv, pbattery, pgrid, pload, soc }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const dotsRef   = useRef<Dot[]>([])
-  const frameRef  = useRef<number>(0)
-  const lastRef   = useRef<number>(0)
-  const propsRef  = useRef({ ppv, pbattery, pgrid, pload })
+  const canvasRef  = useRef<HTMLCanvasElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const scaleRef   = useRef({ x: 1, y: 1 })   // canvas-px per logical-px
+  const dotsRef    = useRef<Dot[]>([])
+  const frameRef   = useRef<number>(0)
+  const lastRef    = useRef<number>(0)
+  const propsRef   = useRef({ ppv, pbattery, pgrid, pload })
 
   // Keep latest props accessible inside rAF without closure issues
   propsRef.current = { ppv, pbattery, pgrid, pload }
@@ -163,7 +165,9 @@ export default function EnergyFlow({ ppv, pbattery, pgrid, pload, soc }: Props) 
     const dpr = window.devicePixelRatio || 1
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.save()
-    ctx.scale(dpr, dpr)
+    // Scale so we always draw in the logical W×H coordinate space
+    const { x: sx, y: sy } = scaleRef.current
+    ctx.scale(dpr * sx, dpr * sy)
 
     // Advance and draw each dot
     for (const dot of dotsRef.current) {
@@ -199,14 +203,25 @@ export default function EnergyFlow({ ppv, pbattery, pgrid, pload, soc }: Props) 
   }, [])
 
   useEffect(() => {
-    const canvas = canvasRef.current!
+    const canvas    = canvasRef.current!
+    const container = containerRef.current!
     const dpr = window.devicePixelRatio || 1
-    canvas.width  = W * dpr
-    canvas.height = H * dpr
-    canvas.style.width  = W + 'px'
-    canvas.style.height = H + 'px'
+
+    function resize() {
+      const cw = container.clientWidth  || W
+      const ch = container.clientHeight || H
+      canvas.width        = cw * dpr
+      canvas.height       = ch * dpr
+      canvas.style.width  = cw + 'px'
+      canvas.style.height = ch + 'px'
+      scaleRef.current    = { x: cw / W, y: ch / H }
+    }
+
+    resize()
+    const ro = new ResizeObserver(resize)
+    ro.observe(container)
     frameRef.current = requestAnimationFrame(draw)
-    return () => cancelAnimationFrame(frameRef.current)
+    return () => { cancelAnimationFrame(frameRef.current); ro.disconnect() }
   }, [draw])
 
   // Derived display states
@@ -239,7 +254,8 @@ export default function EnergyFlow({ ppv, pbattery, pgrid, pload, soc }: Props) 
         Energy Flow
       </div>
 
-      <div style={{ position: 'relative', width: W, height: H, maxWidth: '100%' }}>
+      <div ref={containerRef}
+        style={{ position: 'relative', width: '100%', aspectRatio: `${W}/${H}` }}>
         {/* Canvas: animated dots */}
         <canvas ref={canvasRef}
           style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }} />
