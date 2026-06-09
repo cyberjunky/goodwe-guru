@@ -24,6 +24,18 @@ function shiftDate(date: string, days: number) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+/** Coloured Sankey ribbon, tinted by its source node. */
+function FlowLink(props: any) {
+  const { sourceX, sourceY, sourceControlX, targetControlX, targetX, targetY, linkWidth, payload } = props
+  const c = COLOR[payload?.source?.name?.trim()] ?? '#64748b'
+  return (
+    <path
+      d={`M${sourceX},${sourceY} C${sourceControlX},${sourceY} ${targetControlX},${targetY} ${targetX},${targetY}`}
+      fill="none" stroke={c} strokeOpacity={0.35} strokeWidth={Math.max(1, linkWidth)} strokeLinecap="butt"
+    />
+  )
+}
+
 /** Coloured Sankey node (label drawn beside it). */
 function FlowNode(props: any) {
   const { x, y, width, height, payload, containerWidth } = props
@@ -151,7 +163,7 @@ export default function Flow() {
                 nodePadding={28}
                 nodeWidth={12}
                 margin={{ top: 10, right: 90, bottom: 10, left: 70 }}
-                link={{ stroke: '#33415544' } as any}
+                link={<FlowLink />}
                 node={<FlowNode />}
               >
                 <Tooltip

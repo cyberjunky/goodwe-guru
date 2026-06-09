@@ -619,9 +619,9 @@ async def create_from_template(body: dict, _: str = Depends(require_auth)):
             f"Start ECO charge when SoC drops below {min_soc}%",
             "AND",
             [{"sensor":"battery_soc","op":"lte","value":min_soc,"value2":0}],
-            [{"type":"eco_charge","setting":"","value":None,"message":""},
+            [{"type":"eco_charge","setting":"","value":None,"soc":min_soc,"message":""},
              {"type":"notify","setting":"","value":None,
-              "message":f"🔋 Battery below {min_soc}% — ECO charge started"}],
+              "message":f"🔋 Battery below {min_soc}% — ECO charge to hold {min_soc}%"}],
             cdwn,
         ))
         created.append(make(
@@ -673,9 +673,9 @@ async def create_from_template(body: dict, _: str = Depends(require_auth)):
             f"(hysteresis {hyst}% — re-arms once SoC rises to {min_soc + hyst:.0f}%)",
             "AND",
             [{"sensor":"battery_soc","op":"lte","value":min_soc,"value2":0}],
-            [{"type":"eco_charge","setting":"","value":None,"message":""},
+            [{"type":"eco_charge","setting":"","value":None,"soc":min_soc,"message":""},
              {"type":"notify","setting":"","value":None,
-              "message":f"⚠️ SoC below {min_soc}% — ECO charge started"}],
+              "message":f"⚠️ SoC below {min_soc}% — ECO charge to hold {min_soc}%"}],
             10, hyst,
         ))
         # Rule 4: pre-evening boost (long cooldown — fires at most once per afternoon)
@@ -684,7 +684,7 @@ async def create_from_template(body: dict, _: str = Depends(require_auth)):
             f"ECO charge if battery below {eve_target}% (cooldown 2 h — fires at most once per afternoon)",
             "AND",
             [{"sensor":"battery_soc","op":"lt","value":eve_target,"value2":0}],
-            [{"type":"eco_charge","setting":"","value":None,"message":""},
+            [{"type":"eco_charge","setting":"","value":None,"soc":eve_target,"message":""},
              {"type":"notify","setting":"","value":None,
               "message":f"☀️ Pre-evening charge started — target {eve_target}% before dark"}],
             120, hyst,

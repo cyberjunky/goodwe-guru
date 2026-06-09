@@ -229,15 +229,18 @@ async def execute(action: dict, inverter: Any) -> str:
             return "work_mode → General (0)"
 
     elif atype == "eco_charge":
-        # Switch to Eco mode with an all-day charge schedule (eco_mode_1)
+        # Switch to Eco mode with an all-day charge schedule, capped at a target
+        # SoC (NOT 100%). The SoC cap field prevents the battery being pinned full.
         if inverter:
+            soc = int(action.get("soc", 90))
+            soc = max(10, min(soc, 100))
             await inverter.write_setting("work_mode", 3)
             try:
-                # Write eco_mode_1 as all-day charge (start=00:00, end=23:59, charge=True)
-                await inverter.write_setting("eco_mode_1", "00:00-23:59-100-0-1")
+                # start-end-power%-SoC cap-charge(1)
+                await inverter.write_setting("eco_mode_1", f"00:00-23:59-100-{soc}-1")
             except Exception:
                 pass
-            return "ECO charge mode (all day)"
+            return f"ECO charge to {soc}%"
 
     elif atype == "eco_discharge":
         if inverter:
@@ -355,12 +358,14 @@ TEMPLATES = [
         "logic":       "AND",
         "conditions":  [{"sensor": "battery_soc", "op": "lte", "value": 20, "value2": 0}],
         "actions":     [
-            {"type": "eco_charge", "setting": "", "value": None, "message": ""},
+            {"type": "eco_charge", "setting": "", "value": None, "soc": 20, "message": ""},
         ],
         "cooldown":    10,
         "params":      [
             {"key": "conditions.0.value", "label": "Min SoC (%)", "type": "number",
              "min": 5, "max": 50, "default": 20},
+            {"key": "actions.0.soc", "label": "Hold SoC at (%)", "type": "number",
+             "min": 5, "max": 60, "default": 20},
         ],
     },
     {
@@ -387,11 +392,13 @@ TEMPLATES = [
             {"sensor": "battery_soc", "op": "lt", "value": 80, "value2": 0},
         ],
         "actions":     [
-            {"type": "eco_charge", "setting": "", "value": None, "message": ""},
+            {"type": "eco_charge", "setting": "", "value": None, "soc": 80, "message": ""},
         ],
         "cooldown":    60,
         "params":      [
             {"key": "conditions.0.value", "label": "Charge until SoC (%)", "type": "number",
+             "min": 50, "max": 100, "default": 80},
+            {"key": "actions.0.soc", "label": "Charge target SoC (%)", "type": "number",
              "min": 50, "max": 100, "default": 80},
         ],
     },
