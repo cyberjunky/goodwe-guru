@@ -350,7 +350,7 @@ export default function EnergyFlow({ ppv, pbattery, pgrid, pload, soc }: Props) 
           {(bChg || bDis) && (
             <text x={NODE.bat.x} y={NODE.bat.y - NR - 8} textAnchor="middle"
               fontSize="9.5" fill={batColor} fontFamily="system-ui,sans-serif">
-              {bChg ? `↑ ${fmt(pbattery)}` : `↓ ${fmt(pbattery)}`}
+              {bChg ? `Charging ${fmt(pbattery)}` : `Discharging ${fmt(pbattery)}`}
             </text>
           )}
         </svg>
