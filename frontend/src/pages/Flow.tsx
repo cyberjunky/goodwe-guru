@@ -174,6 +174,12 @@ export default function Flow() {
             </ResponsiveContainer>
           </div>
 
+          {((flow!.sources.battery ?? 0) + (flow!.destinations.battery ?? 0) === 0) && (
+            <div className="text-[11px] text-gray-500 -mt-1">
+              Battery was idle this day — no charge/discharge recorded, so it has no flow band.
+            </div>
+          )}
+
           {/* Source / destination breakdown */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
