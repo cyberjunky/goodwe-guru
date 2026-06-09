@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from config import settings as cfg
+from inverter_io import apply_setting
 
 log = logging.getLogger(__name__)
 _FILE = Path(cfg.db_path).parent / "automations.json"
@@ -50,6 +51,7 @@ OPERATORS = {
 
 ACTION_TYPES = {
     "set_work_mode":    "Set Work Mode",
+    "set_dod":          "Set Depth-of-Discharge (battery floor)",
     "write_setting":    "Write Setting",
     "eco_charge":       "Start ECO Charge (all day)",
     "eco_discharge":    "Start ECO Discharge (all day)",
@@ -213,30 +215,27 @@ async def execute(action: dict, inverter: Any) -> str:
         key = action.get("setting", "")
         val = action.get("value")
         if key and val is not None and inverter:
-            await inverter.write_setting(key, val)
-            return f"write_setting({key}={val})"
+            return await apply_setting(inverter, key, val)
+
+    elif atype == "set_dod":
+        # Battery floor: 0 = no discharge (hold), 80 = normal (floor 20%).
+        if inverter:
+            return await apply_setting(inverter, "dod", int(action.get("value", 80)))
 
     elif atype == "set_work_mode":
-        mode = int(action.get("value", 0))
         if inverter:
-            await inverter.write_setting("work_mode", mode)
-            labels = {0:"General",1:"Off-Grid",2:"Backup",3:"Eco",4:"Peak Shaving",5:"Self-Use"}
-            return f"work_mode → {labels.get(mode, mode)}"
+            return await apply_setting(inverter, "work_mode", int(action.get("value", 0)))
 
     elif atype == "set_general_mode":
         if inverter:
-            await inverter.write_setting("work_mode", 0)
-            return "work_mode → General (0)"
+            return await apply_setting(inverter, "work_mode", 0)
 
     elif atype == "eco_charge":
-        # Switch to Eco mode with an all-day charge schedule, capped at a target
-        # SoC (NOT 100%). The SoC cap field prevents the battery being pinned full.
+        # Switch to Eco mode with an all-day charge schedule, capped at a target SoC.
         if inverter:
-            soc = int(action.get("soc", 90))
-            soc = max(10, min(soc, 100))
-            await inverter.write_setting("work_mode", 3)
+            soc = max(10, min(int(action.get("soc", 90)), 100))
+            await apply_setting(inverter, "work_mode", 3)
             try:
-                # start-end-power%-SoC cap-charge(1)
                 await inverter.write_setting("eco_mode_1", f"00:00-23:59-100-{soc}-1")
             except Exception:
                 pass
@@ -244,7 +243,7 @@ async def execute(action: dict, inverter: Any) -> str:
 
     elif atype == "eco_discharge":
         if inverter:
-            await inverter.write_setting("work_mode", 3)
+            await apply_setting(inverter, "work_mode", 3)
             try:
                 await inverter.write_setting("eco_mode_1", "00:00-23:59-100-0-0")
             except Exception:

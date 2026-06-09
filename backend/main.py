@@ -243,8 +243,10 @@ async def write_setting(body: SettingWrite, _: str = Depends(require_auth)):
     if inverter is None:
         raise HTTPException(503, "Inverter not connected")
     try:
-        await inverter.write_setting(body.key, body.value)
-        return {"ok": True}
+        from inverter_io import apply_setting
+        result = await apply_setting(inverter, body.key, body.value)
+        log.info("Setting written: %s", result)
+        return {"ok": True, "result": result}
     except Exception as e:
         raise HTTPException(500, str(e))
 

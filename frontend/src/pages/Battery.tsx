@@ -1,6 +1,62 @@
+import { useState, useEffect } from 'react'
 import { useInverter } from '../context/InverterContext'
 import StatCard from '../components/StatCard'
-import { Battery as BatteryIcon, Thermometer, Activity, Cpu } from 'lucide-react'
+import { Battery as BatteryIcon, Thermometer, Activity, Cpu, ShieldCheck, BatteryCharging } from 'lucide-react'
+
+/** Depth-of-Discharge readout + Hold/Normal control (uses set_ongrid_battery_dod). */
+function DischargeControl() {
+  const token = localStorage.getItem('gw_token') ?? ''
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  const [dod, setDod] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function refresh() {
+    try {
+      const r = await fetch('/api/settings', { headers })
+      if (r.ok) { const j = await r.json(); if (j.dod !== undefined && j.dod !== null) setDod(Number(j.dod)) }
+    } catch { /* ES read can time out; leave as-is */ }
+  }
+  useEffect(() => { refresh() }, [])
+
+  async function apply(value: number) {
+    setBusy(true)
+    try {
+      const r = await fetch('/api/settings', { method: 'POST', headers, body: JSON.stringify({ key: 'dod', value }) })
+      if (r.ok) setDod(value)
+    } finally { setBusy(false) }
+  }
+
+  const floor = dod === null ? null : 100 - dod
+  const holding = dod === 0
+  const btn = (active: boolean) =>
+    `flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors border ` +
+    (active ? 'bg-amber-500 text-gray-950 border-amber-500'
+            : 'bg-gray-800 text-gray-300 border-gray-700 hover:border-gray-600')
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-3">
+      <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide flex items-center gap-2">
+        <ShieldCheck size={14} /> Discharge Control
+      </h2>
+      <div className="text-sm text-gray-300">
+        Depth of Discharge: <b>{dod ?? '—'}%</b>
+        <span className="text-gray-500"> · won't discharge below <b className="text-gray-300">{floor ?? '—'}%</b> SoC</span>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={() => apply(0)} disabled={busy} className={btn(holding)}>
+          <ShieldCheck size={15} /> Hold (no discharge)
+        </button>
+        <button onClick={() => apply(80)} disabled={busy} className={btn(dod !== null && !holding)}>
+          <BatteryCharging size={15} /> Normal (to 20%)
+        </button>
+      </div>
+      <p className="text-[11px] text-gray-500 leading-relaxed">
+        <b>Hold</b> sets the floor to 100% — the grid covers the house and the battery is preserved.
+        <b> Normal</b> lets the battery power the house down to 20%. (Writes the inverter's on-grid DoD.)
+      </p>
+    </div>
+  )
+}
 
 function SocGauge({ soc }: { soc: number }) {
   const color = soc > 60 ? '#22c55e' : soc > 20 ? '#f59e0b' : '#ef4444'
@@ -89,6 +145,8 @@ export default function Battery() {
           <StatCard label="Charged Today" value={data.e_bat_charge_day?.toFixed(2) ?? '—'} unit="kWh" color="text-emerald-400" />
         </div>
       </div>
+
+      <DischargeControl />
 
       {/* Cell-level data */}
       {maxCellV > 0 && (
