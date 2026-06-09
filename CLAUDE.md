@@ -33,6 +33,10 @@ backend/          FastAPI + goodwe library (Modbus/UDP) + SQLite + JWT
   tariffs.py      Financial calculations, TOU pricing
   forecast.py     Forecast.Solar API integration (cached 30 min)
   notifications.py Telegram alert engine (8 event types)
+  telegram_bot.py  Interactive Telegram bot (long-poll getUpdates): commands +
+                   inline-button menus, matplotlib charts, work-mode control,
+                   automation toggles. Reuses notifications bot_token/chat_id;
+                   only the configured chat_id may control. Started in lifespan.
 
 frontend/         React 19 + Vite + TypeScript + Tailwind CSS v4
   src/context/InverterContext.tsx   WebSocket client, live data, settings API

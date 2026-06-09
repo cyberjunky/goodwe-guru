@@ -173,6 +173,12 @@ async def lifespan(_app: FastAPI):
         get_data=lambda: latest_data,
         get_inverter=lambda: inverter,
     ))
+    import telegram_bot
+    asyncio.create_task(telegram_bot.run_loop(
+        get_data=lambda: latest_data,
+        get_inverter=lambda: inverter,
+        db=db,
+    ))
     yield
     db.close()
 
