@@ -164,18 +164,23 @@ class Database:
                 if 0 < dt <= 120:                       # cap gaps so outages don't inflate
                     h     = dt / 3600.0
                     solar = max(float(d.get("ppv", 0) or 0), 0)
-                    pb    = float(d.get("pbattery1", 0) or 0)   # >0 charge, <0 discharge
-                    bc, bd = max(pb, 0), max(-pb, 0)
                     pg    = float(d.get("pgrid", 0) or 0)       # >0 import, <0 export (normalised)
-                    gi    = max(pg, 0)
+                    gi, ge = max(pg, 0), max(-pg, 0)
                     load  = max(float(d.get("load_ptotal", 0) or 0), 0)
+
+                    # Derive battery power from energy balance, NOT pbattery1 (whose
+                    # sign convention is platform-dependent and was wrong on ES):
+                    #   solar + grid_import + batt_discharge = load + grid_export + batt_charge
+                    # → batt_net = solar + pg - load  (>0 charge, <0 discharge)
+                    batt_net = solar + pg - load
+                    bc, bd = max(batt_net, 0), max(-batt_net, 0)
 
                     L = load
                     s_load = min(solar, L);          s = solar - s_load; L -= s_load
                     b_load = min(bd, L);                                  L -= b_load
                     g_load = min(gi, L);             gi2 = gi - g_load;   L -= g_load
                     s_batt = min(s, bc);             s -= s_batt; bc2 = bc - s_batt
-                    s_grid = s                                            # leftover solar exports
+                    s_grid = min(s, ge)                                   # leftover solar → export
                     g_batt = min(gi2, bc2)
 
                     links["solar_load"] += s_load * h

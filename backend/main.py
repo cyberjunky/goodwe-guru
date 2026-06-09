@@ -105,6 +105,12 @@ def normalise(data: dict) -> dict:
         elif inverter and inverter.__class__.__name__ == "ES":
             d["pgrid"] = -p
 
+    # Battery power sign. ES reports charging as NEGATIVE; the whole frontend
+    # convention is positive = charging (bChg = pbattery1 > 0). Confirmed from
+    # logged data: SoC rose 20→99% while pbattery1 stayed negative. Flip it.
+    if inverter and inverter.__class__.__name__ == "ES" and d.get("pbattery1") is not None:
+        d["pbattery1"] = -float(d["pbattery1"])
+
     # Missing counters → 0 so the UI shows 0.00 instead of "undefined"
     for key in ("e_day_imp", "e_day_exp", "e_total_imp", "e_total_exp",
                 "e_bat_charge_day", "e_bat_discharge_day",
