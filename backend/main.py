@@ -399,7 +399,12 @@ async def get_financials(range: str = Query("7d"), _: str = Depends(require_auth
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/api/forecast/config")
 async def get_forecast_config(_: str = Depends(require_auth)):
-    return asdict(load_forecast_config())
+    cfg_d = asdict(load_forecast_config())
+    try:
+        cfg_d["detected_peak_kw"] = round(db.get_peak_pv() / 1000, 2) or None
+    except Exception:
+        cfg_d["detected_peak_kw"] = None
+    return cfg_d
 
 @app.post("/api/forecast/config")
 async def save_forecast_config_api(body: dict, _: str = Depends(require_auth)):

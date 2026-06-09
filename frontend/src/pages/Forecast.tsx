@@ -21,6 +21,7 @@ interface ForecastConfig {
   lat:      number
   lon:      number
   planes:   { label: string; kwp: number; tilt: number; azimuth: number }[]
+  detected_peak_kw?: number | null
 }
 
 type TooltipEntry = { name?: string; value?: number; color?: string }
@@ -79,6 +80,16 @@ function ConfigForm({ config, onSave }: { config: ForecastConfig; onSave: (c: Fo
       </div>
 
       <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wide">Roof Planes / String Orientations</h3>
+      {!!local.detected_peak_kw && (
+        <div className="text-[11px] text-gray-500 -mt-2">
+          Highest PV power your inverter has reported: <span className="text-amber-400 font-medium">{local.detected_peak_kw} kW</span>
+          {' '}— your array kWp is roughly this.
+          {local.planes.length === 1 && (
+            <button type="button" onClick={() => setPlane(0, 'kwp', local.detected_peak_kw!)}
+              className="ml-1 text-amber-400 hover:text-amber-300 underline">use {local.detected_peak_kw} kWp</button>
+          )}
+        </div>
+      )}
       {local.planes.map((plane, i) => (
         <div key={i} className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">
           <div className="flex items-center justify-between">

@@ -200,6 +200,11 @@ class Database:
         return {"date": date, "links": links, "sources": sources,
                 "destinations": destinations, "samples": len(rows)}
 
+    def get_peak_pv(self) -> float:
+        """Highest PV power (W) ever recorded — a proxy for installed array size."""
+        row = self.con.execute("SELECT MAX(ppv_max) AS m FROM daily_summary").fetchone()
+        return float(row["m"] or 0) if row else 0.0
+
     def get_today_summary(self) -> dict:
         """Return today's daily_summary row as a dict (for Telegram daily message)."""
         date = datetime.utcnow().strftime("%Y-%m-%d")
