@@ -311,6 +311,10 @@ async def get_history(range: str = Query("7d"), _: str = Depends(require_auth)):
 async def get_energy_flow(date: str | None = Query(None), _: str = Depends(require_auth)):
     return db.get_energy_flow(date)
 
+@app.get("/api/history/day")
+async def get_history_day(date: str | None = Query(None), _: str = Depends(require_auth)):
+    return db.get_day_series(date)
+
 @app.get("/api/battery-schedule")
 async def get_battery_schedule(_: str = Depends(require_auth)):
     from battery_schedule import load_schedule, sun_times

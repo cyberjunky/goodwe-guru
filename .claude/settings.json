@@ -20,7 +20,8 @@
       "Bash(python -m py_compile backend/main.py backend/automations.py)",
       "Bash(python -m py_compile backend/telegram_bot.py backend/main.py)",
       "Bash(python -c \"import ast; [ast.parse\\(open\\('backend/'+f\\).read\\(\\)\\) for f in ['inverter_io.py','main.py','automations.py']]\")",
-      "Bash(python -m py_compile backend/inverter_io.py backend/main.py backend/automations.py)"
+      "Bash(python -m py_compile backend/inverter_io.py backend/main.py backend/automations.py)",
+      "Bash(python -m py_compile backend/database.py backend/main.py)"
     ]
   }
 }

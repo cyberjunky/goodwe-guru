@@ -231,6 +231,59 @@ class Database:
             "WHERE forecast_kwh IS NOT NULL ORDER BY date DESC LIMIT ?", (n,)).fetchall()
         return [dict(r) for r in rows]
 
+    def get_day_series(self, date: str | None = None, bucket_min: int = 5) -> dict:
+        """
+        Bucketed power-over-time for one day + a derived battery state per bucket
+        (charge / discharge / hold / idle). Battery is from energy balance
+        (solar + pgrid - load), so it's independent of the pbattery1 sign.
+        """
+        import json
+        if not date:
+            date = datetime.now().strftime("%Y-%m-%d")
+        try:
+            start_dt = datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            date = start_dt.strftime("%Y-%m-%d")
+        start = int(start_dt.timestamp())
+        end   = int((start_dt + timedelta(days=1)).timestamp())
+        bucket = max(1, bucket_min) * 60
+
+        rows = self.con.execute(
+            "SELECT ts, data FROM snapshots WHERE ts>=? AND ts<? ORDER BY ts",
+            (start, end)).fetchall()
+
+        agg: dict[int, dict] = {}
+        for r in rows:
+            d = json.loads(r["data"])
+            b = (r["ts"] - start) // bucket
+            a = agg.setdefault(b, {"ppv": 0.0, "pgrid": 0.0, "load": 0.0, "soc": 0.0, "n": 0})
+            a["ppv"]  += float(d.get("ppv", 0) or 0)
+            a["pgrid"] += float(d.get("pgrid", 0) or 0)
+            a["load"] += float(d.get("load_ptotal", 0) or 0)
+            a["soc"]  += float(d.get("battery_soc", 0) or 0)
+            a["n"]    += 1
+
+        series = []
+        for b in sorted(agg):
+            a = agg[b]; n = a["n"] or 1
+            solar, pg, load, soc = a["ppv"]/n, a["pgrid"]/n, a["load"]/n, a["soc"]/n
+            bnet = solar + pg - load   # >0 charge, <0 discharge
+            if   bnet >  100: state = "charge"
+            elif bnet < -100: state = "discharge"
+            elif pg   >  100: state = "hold"     # battery idle while grid covers the house
+            else:             state = "idle"
+            series.append({
+                "t":       datetime.fromtimestamp(start + b * bucket).strftime("%H:%M"),
+                "solar":   round(solar / 1000, 3),
+                "load":    round(load / 1000, 3),
+                "grid":    round(pg / 1000, 3),
+                "battery": round(bnet / 1000, 3),
+                "soc":     round(soc),
+                "state":   state,
+            })
+        return {"date": date, "series": series}
+
     def get_peak_pv(self) -> float:
         """Highest PV power (W) ever recorded — a proxy for installed array size."""
         row = self.con.execute("SELECT MAX(ppv_max) AS m FROM daily_summary").fetchone()
