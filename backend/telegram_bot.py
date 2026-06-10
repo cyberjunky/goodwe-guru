@@ -90,22 +90,32 @@ async def _send_photo(token: str, chat_id: str | int, png: bytes, caption: str =
 def _main_menu() -> list:
     return [
         [{"text": "📊 Status", "callback_data": "status"}, {"text": "📈 Power chart", "callback_data": "chart"}],
-        [{"text": "☀️ Forecast", "callback_data": "forecast"}, {"text": "🔀 Flow", "callback_data": "flow"}],
-        [{"text": "🔋 Battery", "callback_data": "battery"}, {"text": "📅 History", "callback_data": "history"}],
+        [{"text": "📋 Report", "callback_data": "report"}, {"text": "🔀 Flow", "callback_data": "flow"}],
+        [{"text": "☀️ Forecast", "callback_data": "forecast"}, {"text": "📅 History", "callback_data": "history"}],
+        [{"text": "🛡 Hold battery", "callback_data": "hold"}, {"text": "🔋 Normal", "callback_data": "normal"}],
         [{"text": "⚙️ Mode", "callback_data": "mode"}, {"text": "🤖 Automations", "callback_data": "autos"}],
     ]
 
 
 HELP = (
     "<b>GoodWe Guru bot</b>\n\n"
+    "<b>Monitor</b>\n"
     "/status — live power summary\n"
-    "/chart — today's power graph\n"
-    "/energychart — 7-day energy graph\n"
     "/solar /battery /grid — details\n"
     "/today /history — energy totals\n"
-    "/forecast — solar forecast\n"
+    "/report — full daily report\n"
+    "/cost — today's € summary\n"
     "/flow — today's energy flow\n"
-    "/mode [general|backup|offgrid|eco] — view/set work mode\n"
+    "/forecast — solar forecast\n"
+    "<b>Charts</b>\n"
+    "/chart — today's power graph\n"
+    "/energychart — 7-day energy graph\n"
+    "<b>Control</b>\n"
+    "/hold — preserve battery (no discharge)\n"
+    "/normal — resume normal discharge\n"
+    "/dod [0-90] — set battery floor (DoD %)\n"
+    "/export &lt;W&gt; — set grid export limit\n"
+    "/mode [general|backup|offgrid|eco] — work mode\n"
     "/automations — list &amp; toggle rules\n"
 )
 
@@ -300,15 +310,99 @@ def _chart_energy() -> bytes | None:
     return buf.getvalue()
 
 
+def _report_text() -> str:
+    try:
+        f = _db.get_energy_flow(None)
+    except Exception as e:
+        return f"Report unavailable: {e}"
+    s, dst = f.get("sources", {}), f.get("destinations", {})
+    solar = s.get("solar", 0); load = dst.get("load", 0)
+    gimp = s.get("grid", 0); gexp = dst.get("grid", 0)
+    bdis = s.get("battery", 0); bchg = dst.get("battery", 0)
+    self_suff = 100 * (1 - gimp / load) if load else 0
+    lines = [
+        f"<b>📋 Daily report — {f.get('date','')}</b>",
+        "",
+        f"☀️ Solar: <b>{solar:.2f} kWh</b>",
+        f"🏠 Home load: <b>{load:.2f} kWh</b>",
+        f"🔌 Grid: ↓ {gimp:.2f} import · ↑ {gexp:.2f} export kWh",
+        f"🔋 Battery: ↑ {bchg:.2f} charged · ↓ {bdis:.2f} discharged kWh",
+        f"♻️ Self-sufficiency: <b>{self_suff:.0f}%</b>",
+    ]
+    try:
+        from tariffs import load_tariffs, calc_financials
+        t = load_tariffs()
+        fin = calc_financials(t, e_imp=gimp, e_exp=gexp, e_solar=solar, e_load=load, e_bat_dis=bdis)
+        cur = fin.get("currency", "€")
+        lines += [
+            "",
+            f"💶 Net benefit: <b>{cur}{fin.get('net_benefit',0):.2f}</b>",
+            f"   import {cur}{fin.get('import_cost',0):.2f} · export {cur}{fin.get('export_revenue',0):.2f}"
+            f" · solar saved {cur}{fin.get('self_consumed_savings',0):.2f}",
+        ]
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
+def _cost_text() -> str:
+    try:
+        from tariffs import load_tariffs, calc_financials
+        f = _db.get_energy_flow(None)
+        s, dst = f.get("sources", {}), f.get("destinations", {})
+        t = load_tariffs()
+        fin = calc_financials(t, e_imp=s.get("grid", 0), e_exp=dst.get("grid", 0),
+                              e_solar=s.get("solar", 0), e_load=dst.get("load", 0),
+                              e_bat_dis=s.get("battery", 0))
+        cur = fin.get("currency", "€")
+        return (
+            f"<b>💶 Today</b>\n"
+            f"Net benefit: <b>{cur}{fin.get('net_benefit',0):.2f}</b>\n"
+            f"Import cost: {cur}{fin.get('import_cost',0):.2f}\n"
+            f"Export revenue: {cur}{fin.get('export_revenue',0):.2f}\n"
+            f"Solar savings: {cur}{fin.get('self_consumed_savings',0):.2f}"
+        )
+    except Exception as e:
+        return f"Cost unavailable: {e}"
+
+
 async def _set_mode(value: int) -> str:
     inv = _get_inverter() if _get_inverter else None
     if not inv:
         return "Inverter not connected."
     try:
-        await inv.write_setting("work_mode", value)
+        from inverter_io import apply_setting
+        await apply_setting(inv, "work_mode", value)
         return f"✅ Work mode set to <b>{WORK_MODE_NAMES.get(value, value)}</b>."
     except Exception as e:
         return f"⚠️ Failed to set mode: {e}"
+
+
+async def _set_dod(value: int) -> str:
+    inv = _get_inverter() if _get_inverter else None
+    if not inv:
+        return "Inverter not connected."
+    value = max(0, min(int(value), 90))
+    try:
+        from inverter_io import apply_setting
+        await apply_setting(inv, "dod", value)
+        if value == 0:
+            return "🛡 Battery <b>held</b> (floor 100% — won't discharge; grid covers the house)."
+        return f"🔋 Battery floor set: DoD <b>{value}%</b> (discharges down to {100-value}% SoC)."
+    except Exception as e:
+        return f"⚠️ Failed to set DoD: {e}"
+
+
+async def _set_export(value: int) -> str:
+    inv = _get_inverter() if _get_inverter else None
+    if not inv:
+        return "Inverter not connected."
+    try:
+        from inverter_io import apply_setting
+        await apply_setting(inv, "grid_export_limit", int(value))
+        return f"✅ Grid export limit set to <b>{int(value)} W</b>."
+    except Exception as e:
+        return f"⚠️ Failed to set export limit: {e}"
 
 
 # ── Dispatch ────────────────────────────────────────────────────────────────────
@@ -332,8 +426,26 @@ async def _handle_command(token: str, chat_id: str | int, text: str):
         await _send(token, chat_id, _history_text())
     elif cmd == "flow":
         await _send(token, chat_id, _flow_text())
+    elif cmd == "report":
+        await _send(token, chat_id, _report_text(), _main_menu())
+    elif cmd == "cost":
+        await _send(token, chat_id, _cost_text())
     elif cmd == "forecast":
         await _send(token, chat_id, await _forecast_text())
+    elif cmd == "hold":
+        await _send(token, chat_id, await _set_dod(0))
+    elif cmd == "normal":
+        await _send(token, chat_id, await _set_dod(80))
+    elif cmd == "dod":
+        if arg.isdigit():
+            await _send(token, chat_id, await _set_dod(int(arg)))
+        else:
+            await _send(token, chat_id, "Usage: /dod &lt;0-90&gt;  (0 = hold, 80 = normal)")
+    elif cmd == "export":
+        if arg.isdigit():
+            await _send(token, chat_id, await _set_export(int(arg)))
+        else:
+            await _send(token, chat_id, "Usage: /export &lt;watts&gt;  e.g. /export 3000")
     elif cmd in ("chart", "energychart"):
         png = _chart_power() if cmd == "chart" else _chart_energy()
         if png:
@@ -361,8 +473,11 @@ async def _handle_callback(token: str, chat_id: str | int, cb_id: str, cdata: st
     if cdata == "status":   await _send(token, chat_id, _status_text(), _main_menu())
     elif cdata == "battery":  await _send(token, chat_id, _battery_text())
     elif cdata == "flow":     await _send(token, chat_id, _flow_text())
+    elif cdata == "report":   await _send(token, chat_id, _report_text(), _main_menu())
     elif cdata == "history":  await _send(token, chat_id, _history_text())
     elif cdata == "forecast": await _send(token, chat_id, await _forecast_text())
+    elif cdata == "hold":     await _send(token, chat_id, await _set_dod(0), _main_menu())
+    elif cdata == "normal":   await _send(token, chat_id, await _set_dod(80), _main_menu())
     elif cdata == "chart":
         png = _chart_power()
         await (_send_photo(token, chat_id, png) if png else _send(token, chat_id, "No data yet."))
