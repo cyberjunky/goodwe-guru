@@ -167,6 +167,28 @@ async def broadcast(msg: dict):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Forecast accuracy logger — records each day's forecast vs actual production
+# ─────────────────────────────────────────────────────────────────────────────
+async def forecast_logger():
+    from datetime import datetime
+    await asyncio.sleep(120)   # let the first poll/forecast settle
+    while True:
+        try:
+            fc = load_forecast_config()
+            if getattr(fc, "enabled", False):
+                today = datetime.now().strftime("%Y-%m-%d")
+                data = await fetch_forecast(fc)
+                for d in daily_forecast(data):
+                    if d["date"] == today:
+                        db.record_forecast(today, d["kwh"])   # first-of-day wins
+                if latest_data.get("e_day") is not None:
+                    db.record_actual(today, float(latest_data["e_day"]))
+        except Exception as e:
+            log.warning("forecast_logger: %s", e)
+        await asyncio.sleep(3600)   # hourly
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Lifespan
 # ─────────────────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -185,6 +207,7 @@ async def lifespan(_app: FastAPI):
         get_inverter=lambda: inverter,
         db=db,
     ))
+    asyncio.create_task(forecast_logger())
     yield
     db.close()
 
@@ -429,6 +452,20 @@ async def save_forecast_config_api(body: dict, _: str = Depends(require_auth)):
     save_forecast_config(fc)
     clear_forecast_cache()   # config changed → force a fresh fetch next time
     return {"ok": True}
+
+@app.get("/api/forecast/accuracy")
+async def forecast_accuracy(_: str = Depends(require_auth)):
+    rows = db.get_forecast_accuracy(14)
+    out = []
+    for r in rows:
+        f, a = r.get("forecast_kwh"), r.get("actual_kwh")
+        err = round((a - f) / f * 100, 1) if (f and a is not None) else None
+        out.append({**r, "error_pct": err})
+    # Overall bias across days with both values (>0 forecast over-predicts)
+    errs = [o["error_pct"] for o in out if o["error_pct"] is not None]
+    bias = round(sum(errs) / len(errs), 1) if errs else None
+    return {"days": out, "bias_pct": bias}
+
 
 @app.get("/api/forecast")
 async def get_forecast(force: bool = Query(False), _: str = Depends(require_auth)):

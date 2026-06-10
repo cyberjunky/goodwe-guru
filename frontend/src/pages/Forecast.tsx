@@ -8,6 +8,7 @@ import { useInverter } from '../context/InverterContext'
 
 interface HourlyPoint { hour: number; watts: number }
 interface DayForecast  { date: string; kwh: number }
+interface AccuracyDay  { date: string; forecast_kwh: number; actual_kwh: number | null; error_pct: number | null }
 interface ForecastResp {
   hourly_today: HourlyPoint[]
   daily:        DayForecast[]
@@ -138,12 +139,14 @@ export default function Forecast() {
   const [config, setConfig]       = useState<ForecastConfig | null>(null)
   const [loading, setLoading]     = useState(false)
   const [showConfig, setShowConfig] = useState(false)
+  const [accuracy, setAccuracy]   = useState<{ days: AccuracyDay[]; bias_pct: number | null } | null>(null)
   const token   = localStorage.getItem('gw_token') ?? ''
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
 
   useEffect(() => {
     loadConfig()
     loadForecast()
+    fetch('/api/forecast/accuracy', { headers }).then(r => r.json()).then(setAccuracy).catch(() => {})
   }, [])
 
   async function loadConfig() {
@@ -305,6 +308,39 @@ export default function Forecast() {
               <Bar dataKey="Forecast" fill="#f59e0b" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Forecast vs actual accuracy */}
+      {accuracy && accuracy.days.length > 0 && (
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-1">Forecast vs Actual</h2>
+          {accuracy.bias_pct !== null && (
+            <p className="text-xs mb-3" style={{ color: Math.abs(accuracy.bias_pct) < 10 ? '#34d399' : '#f59e0b' }}>
+              Average bias: <b>{accuracy.bias_pct > 0 ? '+' : ''}{accuracy.bias_pct}%</b>
+              {Math.abs(accuracy.bias_pct) < 10
+                ? ' — well calibrated 👍'
+                : accuracy.bias_pct > 0
+                  ? ' — forecast runs high; try lowering kWp / check tilt & azimuth.'
+                  : ' — forecast runs low; try raising kWp.'}
+            </p>
+          )}
+          <div className="space-y-1">
+            <div className="grid grid-cols-4 gap-2 text-[10px] text-gray-500 uppercase tracking-wide">
+              <span>Date</span><span className="text-right">Forecast</span><span className="text-right">Actual</span><span className="text-right">Error</span>
+            </div>
+            {accuracy.days.map(d => (
+              <div key={d.date} className="grid grid-cols-4 gap-2 text-xs py-1 border-b border-gray-800 last:border-0">
+                <span className="text-gray-400">{d.date.slice(5)}</span>
+                <span className="text-right text-amber-400">{d.forecast_kwh?.toFixed(1)}</span>
+                <span className="text-right text-gray-200">{d.actual_kwh != null ? d.actual_kwh.toFixed(1) : '—'}</span>
+                <span className="text-right" style={{ color: d.error_pct == null ? '#6b7280' : Math.abs(d.error_pct) < 15 ? '#34d399' : '#f87171' }}>
+                  {d.error_pct == null ? '—' : `${d.error_pct > 0 ? '+' : ''}${d.error_pct}%`}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="text-[10px] text-gray-600 mt-2">Builds up daily; +error = forecast over-predicted. Tune kWp/tilt/azimuth to shrink the bias.</p>
         </div>
       )}
 

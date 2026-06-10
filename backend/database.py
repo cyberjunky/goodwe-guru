@@ -36,6 +36,12 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_snapshots_ts ON snapshots(ts);
 
+            CREATE TABLE IF NOT EXISTS forecast_log (
+                date          TEXT PRIMARY KEY,
+                forecast_kwh  REAL,
+                actual_kwh    REAL
+            );
+
             CREATE TABLE IF NOT EXISTS daily_summary (
                 date              TEXT PRIMARY KEY,
                 e_day             REAL DEFAULT 0,
@@ -204,6 +210,26 @@ class Database:
         }
         return {"date": date, "links": links, "sources": sources,
                 "destinations": destinations, "samples": len(rows)}
+
+    def record_forecast(self, date: str, forecast_kwh: float):
+        """Store the day's forecast once (first capture of the day wins)."""
+        self.con.execute(
+            "INSERT INTO forecast_log(date, forecast_kwh) VALUES(?,?) "
+            "ON CONFLICT(date) DO NOTHING", (date, round(float(forecast_kwh), 2)))
+        self.con.commit()
+
+    def record_actual(self, date: str, actual_kwh: float):
+        self.con.execute(
+            "INSERT INTO forecast_log(date, actual_kwh) VALUES(?,?) "
+            "ON CONFLICT(date) DO UPDATE SET actual_kwh=excluded.actual_kwh",
+            (date, round(float(actual_kwh), 2)))
+        self.con.commit()
+
+    def get_forecast_accuracy(self, n: int = 14) -> list[dict]:
+        rows = self.con.execute(
+            "SELECT date, forecast_kwh, actual_kwh FROM forecast_log "
+            "WHERE forecast_kwh IS NOT NULL ORDER BY date DESC LIMIT ?", (n,)).fetchall()
+        return [dict(r) for r in rows]
 
     def get_peak_pv(self) -> float:
         """Highest PV power (W) ever recorded — a proxy for installed array size."""
