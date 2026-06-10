@@ -189,6 +189,31 @@ async def forecast_logger():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Sunrise/sunset battery hold — hold the battery in daylight, discharge at night
+# ─────────────────────────────────────────────────────────────────────────────
+async def battery_sun_scheduler():
+    from battery_schedule import load_schedule, is_daytime
+    from inverter_io import apply_setting
+    last_dod = None
+    await asyncio.sleep(60)
+    while True:
+        try:
+            sch = load_schedule()
+            if sch.enabled and inverter is not None:
+                fc = load_forecast_config()
+                desired = sch.day_dod if is_daytime(fc.lat, fc.lon) else sch.night_dod
+                if desired != last_dod:
+                    await apply_setting(inverter, "dod", int(desired))
+                    last_dod = desired
+                    log.info("Battery sun schedule: DoD → %d", desired)
+            else:
+                last_dod = None
+        except Exception as e:
+            log.warning("battery_sun_scheduler: %s", e)
+        await asyncio.sleep(300)   # check every 5 min; writes only on transition
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Lifespan
 # ─────────────────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -208,6 +233,7 @@ async def lifespan(_app: FastAPI):
         db=db,
     ))
     asyncio.create_task(forecast_logger())
+    asyncio.create_task(battery_sun_scheduler())
     yield
     db.close()
 
@@ -284,6 +310,28 @@ async def get_history(range: str = Query("7d"), _: str = Depends(require_auth)):
 @app.get("/api/energy-flow")
 async def get_energy_flow(date: str | None = Query(None), _: str = Depends(require_auth)):
     return db.get_energy_flow(date)
+
+@app.get("/api/battery-schedule")
+async def get_battery_schedule(_: str = Depends(require_auth)):
+    from battery_schedule import load_schedule, sun_times
+    out = asdict(load_schedule())
+    try:
+        fc = load_forecast_config()
+        sr, ss = sun_times(fc.lat, fc.lon)
+        out["sunrise"], out["sunset"] = sr.isoformat(), ss.isoformat()
+    except Exception as e:
+        out["sun_error"] = str(e)
+    return out
+
+@app.post("/api/battery-schedule")
+async def set_battery_schedule(body: dict, _: str = Depends(require_auth)):
+    from battery_schedule import load_schedule, save_schedule
+    s = load_schedule()
+    for k, v in body.items():
+        if hasattr(s, k):
+            setattr(s, k, v)
+    save_schedule(s)
+    return {"ok": True}
 
 @app.get("/api/status")
 async def get_status(_: str = Depends(require_auth)):

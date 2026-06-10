@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useInverter } from '../context/InverterContext'
 import StatCard from '../components/StatCard'
-import { Battery as BatteryIcon, Thermometer, Activity, Cpu, ShieldCheck, BatteryCharging } from 'lucide-react'
+import { Battery as BatteryIcon, Thermometer, Activity, Cpu, ShieldCheck, BatteryCharging, Sunrise } from 'lucide-react'
 
 /** Depth-of-Discharge readout + Hold/Normal control (uses set_ongrid_battery_dod). */
 function DischargeControl() {
@@ -9,14 +9,26 @@ function DischargeControl() {
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
   const [dod, setDod] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
+  const [sched, setSched] = useState<{ enabled: boolean; sunrise?: string; sunset?: string } | null>(null)
 
   async function refresh() {
     try {
       const r = await fetch('/api/settings', { headers })
       if (r.ok) { const j = await r.json(); if (j.dod !== undefined && j.dod !== null) setDod(Number(j.dod)) }
     } catch { /* ES read can time out; leave as-is */ }
+    try {
+      const r = await fetch('/api/battery-schedule', { headers })
+      if (r.ok) setSched(await r.json())
+    } catch { /* ignore */ }
   }
   useEffect(() => { refresh() }, [])
+
+  async function toggleSchedule(enabled: boolean) {
+    setSched(s => s ? { ...s, enabled } : s)
+    try { await fetch('/api/battery-schedule', { method: 'POST', headers, body: JSON.stringify({ enabled }) }) }
+    catch { /* ignore */ }
+  }
+  const hhmm = (iso?: string) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'
 
   async function apply(value: number) {
     setBusy(true)
@@ -54,6 +66,21 @@ function DischargeControl() {
         <b>Hold</b> sets the floor to 100% — the grid covers the house and the battery is preserved.
         <b> Normal</b> lets the battery power the house down to 20%. (Writes the inverter's on-grid DoD.)
       </p>
+
+      {/* Auto sunrise/sunset schedule */}
+      <div className="border-t border-gray-800 pt-3 mt-1 flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm text-gray-200 flex items-center gap-2"><Sunrise size={14} /> Auto-hold during daylight</div>
+          <div className="text-[11px] text-gray-500 mt-0.5">
+            Holds the battery from sunrise to sunset, discharges at night. Tracks your location's sun times.
+            {sched?.sunrise && <> · ☀️ {hhmm(sched.sunrise)} → 🌙 {hhmm(sched.sunset)}</>}
+          </div>
+        </div>
+        <button onClick={() => toggleSchedule(!sched?.enabled)}
+          className={`relative inline-flex w-11 h-6 rounded-full transition-colors shrink-0 ${sched?.enabled ? 'bg-amber-500' : 'bg-gray-700'}`}>
+          <span className={`inline-block w-4 h-4 bg-white rounded-full shadow transform transition-transform mt-1 ${sched?.enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+        </button>
+      </div>
     </div>
   )
 }
