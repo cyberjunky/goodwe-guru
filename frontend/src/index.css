@@ -10,13 +10,14 @@
   --color-gray-900:  #0c1322;
   --color-gray-800:  #111d30;
   --color-gray-700:  #1c2d47;
-  --color-gray-600:  #2a3f5e;
-  --color-gray-500:  #3f5572;
-  --color-gray-400:  #6a82a0;
-  --color-gray-300:  #96aac4;
-  --color-gray-200:  #c2cedf;
-  --color-gray-100:  #e4eaf5;
-  --color-gray-50:   #f0f4fb;
+  --color-gray-600:  #45597a;
+  /* Text greys — brightened for legibility on the dark navy background */
+  --color-gray-500:  #8499ba;
+  --color-gray-400:  #a8bad6;
+  --color-gray-300:  #c8d5ea;
+  --color-gray-200:  #dde5f3;
+  --color-gray-100:  #eef2fb;
+  --color-gray-50:   #f6f9fe;
 
   /* Solar — warm gold, not neon amber */
   --color-amber-500: #e8950a;
@@ -67,15 +68,25 @@
 /* ─── Base ───────────────────────────────────────────────────────────────── */
 :root { color-scheme: dark; }
 
+/* Bump the root size so all rem-based text & spacing scale up for legibility. */
+html { font-size: 17.5px; }
+
 body {
   margin: 0;
   background: #070c18;
-  color: #e4eaf5;
+  color: #eef2fb;
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 0.95rem;
+  line-height: 1.55;
 }
+
+/* Floor the very small hard-coded labels so nothing is sub-11px. */
+[class*="text-[10px]"] { font-size: 11px !important; }
+
+/* Brighten chart axis/label text (overrides recharts' dim inline fills). */
+.recharts-text { fill: #a8bad6 !important; }
+.recharts-cartesian-axis-tick-value { font-size: 11.5px; }
 
 /* ─── Subtle card gradient ───────────────────────────────────────────────── */
 .card {
