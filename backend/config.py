@@ -15,8 +15,8 @@ log = logging.getLogger(__name__)
 
 # ── Locate config file ────────────────────────────────────────────────────────
 _env_candidates = [
-    Path(__file__).parent.parent / "data" / "config.env",   # dev: project/data/
-    Path("/data/goodwe-monitor/config.env"),                  # Proxmox LXC
+    Path("/data/goodwe-guru/config.env"),                    # Proxmox LXC (deployed)
+    Path(__file__).parent.parent / "data" / "config.env",    # dev: project/data/
 ]
 _env_file = next((p for p in _env_candidates if p.exists()), None)
 
