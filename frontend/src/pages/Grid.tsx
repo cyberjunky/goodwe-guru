@@ -81,15 +81,18 @@ export default function Grid() {
         </div>
       )}
 
-      {/* Backup/EPS output */}
-      {(data.backup_ptotal ?? 0) > 0 && (
-        <div className="bg-gray-900 border border-amber-500/20 rounded-2xl p-6">
-          <h2 className="text-sm font-medium text-amber-400 uppercase tracking-wide mb-4">Backup / EPS Output</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard label="Backup Power" value={((data.backup_ptotal ?? 0) / 1000).toFixed(2)} unit="kW" color="text-amber-400" />
-          </div>
+      {/* Backup/EPS output — always shown so you can see whether it's energised */}
+      <div className="bg-gray-900 border border-amber-500/20 rounded-2xl p-6">
+        <h2 className="text-sm font-medium text-amber-400 uppercase tracking-wide mb-4">Backup / EPS Output</h2>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard label="Backup Power" value={((data.backup_ptotal ?? 0) / 1000).toFixed(2)} unit="kW"
+            sub={(data.backup_ptotal ?? 0) > 0 ? 'energised' : 'idle / disconnected'}
+            color={(data.backup_ptotal ?? 0) > 0 ? 'text-amber-400' : 'text-gray-500'} />
         </div>
-      )}
+        <p className="text-[11px] text-gray-500 mt-2">
+          0 W = the EPS output isn't delivering power. Enable Settings → Inverter → <b>Backup / EPS</b> to energise it.
+        </p>
+      </div>
     </div>
   )
 }
