@@ -26,6 +26,10 @@ Key platform constraints — always keep these in mind:
 - `e_total` on ES is already kWh — `normalise()` does NOT scale it (frontend expects kWh).
   ES does not expose `e_day_imp/exp` / `e_total_imp/exp`; they read 0 (derive from snapshots instead).
 - The Settings page hides EMS modes when `platform === 'ES'` (detected via `/api/status`).
+- `backup_supply` (always-on EPS/backup output) is **readable but NOT writable** via the
+  goodwe library on ES — the generic write to its read-offset is silently ignored, and there's
+  no dedicated command. It must be toggled in the **SolarGo app** (then it persists). The
+  Settings page shows it read-only on ES. Do NOT attempt raw register writes for it.
 
 Battery discharge timing is controlled via **on-grid DoD** (`set_ongrid_battery_dod`):
 DoD 0 = floor 100% = hold (no discharge, grid covers the house); DoD 80 = floor 20%
