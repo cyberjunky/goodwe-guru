@@ -75,6 +75,17 @@ async def _send(token: str, chat_id: str | int, text: str, buttons: list | None 
         log.error("tg send: %s", e)
 
 
+async def _edit(token: str, chat_id: str | int, message_id: int, text: str, buttons: list | None = None):
+    payload: dict = {"chat_id": chat_id, "message_id": message_id, "text": text,
+                     "parse_mode": "HTML", "disable_web_page_preview": True}
+    if buttons:
+        payload["reply_markup"] = {"inline_keyboard": buttons}
+    try:
+        await _api(token, "editMessageText", **payload)
+    except Exception as e:
+        log.error("tg edit: %s", e)
+
+
 async def _send_photo(token: str, chat_id: str | int, png: bytes, caption: str = ""):
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
     try:
@@ -135,8 +146,13 @@ def _status_text() -> str:
         f"🏠 Load: <b>{_fmt_w(d.get('load_ptotal'))}</b>\n"
         f"🔌 Grid: <b>{grid}</b>\n"
         f"🔋 Battery: <b>{d.get('battery_soc', '?')}%</b> ({bat})\n"
-        f"📈 Today: <b>{float(d.get('e_day', 0) or 0):.2f} kWh</b>  ·  Total: {float(d.get('e_total', 0) or 0):.1f} kWh"
+        f"📈 Today: <b>{float(d.get('e_day', 0) or 0):.2f} kWh</b>  ·  Total: {float(d.get('e_total', 0) or 0):.1f} kWh\n"
+        f"<i>↻ {datetime.now().strftime('%H:%M:%S')}</i>"
     )
+
+
+def _status_kb() -> list:
+    return [[{"text": "🔄 Refresh", "callback_data": "refresh"}]] + _main_menu()
 
 
 def _battery_text() -> str:
@@ -413,7 +429,7 @@ async def _handle_command(token: str, chat_id: str | int, text: str):
     if cmd in ("start", "help", "menu"):
         await _send(token, chat_id, HELP, _main_menu())
     elif cmd == "status":
-        await _send(token, chat_id, _status_text(), _main_menu())
+        await _send(token, chat_id, _status_text(), _status_kb())
     elif cmd == "battery":
         await _send(token, chat_id, _battery_text())
     elif cmd == "solar":
@@ -465,12 +481,14 @@ async def _handle_command(token: str, chat_id: str | int, text: str):
         await _send(token, chat_id, "Unknown command. /help for the menu.")
 
 
-async def _handle_callback(token: str, chat_id: str | int, cb_id: str, cdata: str):
+async def _handle_callback(token: str, chat_id: str | int, cb_id: str, cdata: str, message_id: int | None = None):
     try:
         await _api(token, "answerCallbackQuery", callback_query_id=cb_id)
     except Exception:
         pass
-    if cdata == "status":   await _send(token, chat_id, _status_text(), _main_menu())
+    if cdata == "refresh" and message_id:
+        await _edit(token, chat_id, message_id, _status_text(), _status_kb()); return
+    if cdata == "status":   await _send(token, chat_id, _status_text(), _status_kb())
     elif cdata == "battery":  await _send(token, chat_id, _battery_text())
     elif cdata == "flow":     await _send(token, chat_id, _flow_text())
     elif cdata == "report":   await _send(token, chat_id, _report_text(), _main_menu())
@@ -533,7 +551,8 @@ async def run_loop(get_data, get_inverter, db):
                         chat = cq["message"]["chat"]["id"]
                         if str(chat) != str(nc.chat_id):
                             continue
-                        await _handle_callback(token, chat, cq["id"], cq.get("data", ""))
+                        await _handle_callback(token, chat, cq["id"], cq.get("data", ""),
+                                               cq["message"].get("message_id"))
                 except Exception as e:
                     log.error("tg update handler: %s", e)
         except httpx.HTTPStatusError as e:
