@@ -83,20 +83,23 @@ export default function Grid() {
 
       {/* Backup/EPS output — ES reports this on the `load` sensors, not pback_up */}
       {(() => {
-        const pl = Number(data.pload ?? data.backup_ptotal ?? 0)
         const vl = Number(data.vload ?? 0)
+        const il = Number(data.iload ?? 0)
+        const pw = vl * il                       // backup terminal power (V×A) — pload is whole-house
         const live = vl > 50
         return (
           <div className="bg-gray-900 border border-amber-500/20 rounded-2xl p-6">
             <h2 className="text-sm font-medium text-amber-400 uppercase tracking-wide mb-4">Backup / EPS Output</h2>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <StatCard label="Output Power" value={(pl / 1000).toFixed(2)} unit="kW" color="text-amber-400" />
+              <StatCard label="Output Power"
+                value={pw >= 1000 ? (pw / 1000).toFixed(2) : pw.toFixed(0)}
+                unit={pw >= 1000 ? 'kW' : 'W'} color="text-amber-400" />
               <StatCard label="Voltage" value={vl.toFixed(0)} unit="V" color={live ? 'text-amber-400' : 'text-gray-500'} />
-              <StatCard label="Current" value={Number(data.iload ?? 0).toFixed(1)} unit="A" />
+              <StatCard label="Current" value={il.toFixed(1)} unit="A" />
               <StatCard label="Frequency" value={Number(data.fload ?? 0).toFixed(2)} unit="Hz" />
             </div>
             <p className="text-[11px] text-gray-500 mt-2">
-              {String(data.load_mode_label ?? '')}{live ? ' · energised' : ' · not energised'}
+              {String(data.load_mode_label ?? '')}{live ? ' · energised' : ' · not energised'} · power = V×A (approx; pload tracks the whole house)
             </p>
           </div>
         )
