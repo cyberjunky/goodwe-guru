@@ -192,10 +192,29 @@ async def forecast_logger():
 # Forecast-driven battery hold — hold while this hour's solar forecast is above
 # a threshold, discharge when below. Re-checks the cached forecast every 5 min.
 # ─────────────────────────────────────────────────────────────────────────────
+async def _apply_dod_verified(target: int, tries: int = 3) -> bool:
+    """Write DoD and confirm it stuck (AA55 writes are occasionally lost).
+    Returns True if confirmed OR unverifiable (read timed out → assume applied);
+    False only if a successful read shows the wrong value (so we retry next cycle)."""
+    from inverter_io import apply_setting
+    last_read = None
+    for _ in range(tries):
+        await apply_setting(inverter, "dod", target)
+        await asyncio.sleep(3)
+        try:
+            d = await inverter.read_settings_data()
+            v = d.get("dod"); last_read = int(getattr(v, "value", v))
+            if last_read == target:
+                return True
+        except Exception:
+            last_read = None
+        await asyncio.sleep(2)
+    return last_read is None
+
+
 async def battery_forecast_scheduler():
     from battery_schedule import load_schedule
     from forecast import current_hour_kwh
-    from inverter_io import apply_setting
     last_dod = None
     await asyncio.sleep(60)
     while True:
@@ -203,13 +222,14 @@ async def battery_forecast_scheduler():
             sch = load_schedule()
             if sch.enabled and inverter is not None:
                 data = await fetch_forecast(load_forecast_config())   # cached (30 min)
-                producing = current_hour_kwh(data) >= float(sch.threshold_kwh)
-                desired = sch.day_dod if producing else sch.night_dod
+                kwh = current_hour_kwh(data)
+                producing = kwh >= float(sch.threshold_kwh)
+                desired = int(sch.day_dod if producing else sch.night_dod)
                 if desired != last_dod:
-                    await apply_setting(inverter, "dod", int(desired))
-                    last_dod = desired
-                    log.info("Battery forecast schedule: hour=%.2f kWh producing=%s DoD→%d",
-                             current_hour_kwh(data), producing, desired)
+                    ok = await _apply_dod_verified(desired)
+                    last_dod = desired if ok else None   # not confirmed → retry next cycle
+                    log.info("Battery forecast schedule: hour=%.2f kWh producing=%s DoD→%d (%s)",
+                             kwh, producing, desired, "ok" if ok else "unconfirmed, retrying")
             else:
                 last_dod = None
         except Exception as e:
