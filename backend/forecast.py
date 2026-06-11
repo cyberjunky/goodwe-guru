@@ -94,7 +94,7 @@ def _num(x: Any) -> float:
         return 0.0
 
 
-async def _fetch_openmeteo(fc: "ForecastConfig", client) -> tuple[dict, dict, list]:
+async def _fetch_openmeteo(fc: "ForecastConfig", client) -> tuple[dict, dict, list, str | None]:
     """
     Fallback forecast via Open-Meteo (free, no key, very reliable).
     Estimates PV from global horizontal irradiance: power(W) ≈ kWp · GHI · PR.
@@ -109,10 +109,13 @@ async def _fetch_openmeteo(fc: "ForecastConfig", client) -> tuple[dict, dict, li
         f"?latitude={_num(fc.lat)}&longitude={_num(fc.lon)}"
         f"&hourly=shortwave_radiation&forecast_days=3&timezone=auto"
     )
+    tz: str | None = None
     try:
         r = await client.get(url)
         r.raise_for_status()
-        j = r.json().get("hourly", {})
+        body = r.json()
+        tz = body.get("timezone")
+        j = body.get("hourly", {})
         times = j.get("time", [])
         ghi   = j.get("shortwave_radiation", [])
         total_kwp = sum(_num(p.get("kwp", 0)) for p in fc.planes)
@@ -125,7 +128,7 @@ async def _fetch_openmeteo(fc: "ForecastConfig", client) -> tuple[dict, dict, li
             wh_day[t[:10]] = wh_day.get(t[:10], 0) + p   # × 1 h
     except Exception as e:
         errors.append(f"Open-Meteo: {e}")
-    return watts, wh_day, errors
+    return watts, wh_day, errors, tz
 
 
 def clear_cache():
@@ -173,6 +176,7 @@ async def fetch_forecast(fc: ForecastConfig, force: bool = False) -> dict:
     merged_watts:     dict[str, float] = {}
     merged_wh_day:    dict[str, float] = {}
     errors:           list[str]        = []
+    tz:               str | None       = None
 
     async with httpx.AsyncClient(timeout=15) as client:
         for plane in fc.planes:
@@ -191,6 +195,7 @@ async def fetch_forecast(fc: ForecastConfig, force: bool = False) -> dict:
                     errors.append(f"{label}: {msg}")
                 r.raise_for_status()
                 data = r.json()
+                tz = tz or data.get("message", {}).get("info", {}).get("timezone")
                 result = data.get("result", {})
                 for ts, w in result.get("watts", {}).items():
                     merged_watts[ts] = merged_watts.get(ts, 0) + w
@@ -205,11 +210,12 @@ async def fetch_forecast(fc: ForecastConfig, force: bool = False) -> dict:
         source = "forecast.solar"
         if not merged_wh_day:
             log.info("Forecast.Solar empty — falling back to Open-Meteo")
-            w2, wh2, e2 = await _fetch_openmeteo(fc, client)
+            w2, wh2, e2, tz2 = await _fetch_openmeteo(fc, client)
             errors.extend(e2)
             if wh2:
                 merged_watts, merged_wh_day = w2, wh2
                 source = "open-meteo"
+                tz = tz or tz2
                 errors.append("Forecast.Solar unavailable — showing Open-Meteo estimate (less precise).")
 
     result = {
@@ -220,6 +226,7 @@ async def fetch_forecast(fc: ForecastConfig, force: bool = False) -> dict:
         "cache_key":      cache_key,
         "errors":         errors,
         "source":         source,
+        "timezone":       tz,
     }
     _mem_cache[cache_key] = result
     try:
@@ -227,6 +234,26 @@ async def fetch_forecast(fc: ForecastConfig, force: bool = False) -> dict:
     except Exception:
         pass
     return result
+
+
+def current_hour_kwh(forecast: dict) -> float:
+    """
+    Forecasted production (kWh) for the hour happening right now, evaluated in
+    the plant's local timezone (from the forecast response). 0 if none (night).
+    """
+    from datetime import datetime
+    tz = forecast.get("timezone")
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo(tz)) if tz else datetime.now()
+    except Exception:
+        now = datetime.now()
+    today, hh = now.strftime("%Y-%m-%d"), now.strftime("%H")
+    best = 0.0
+    for ts, w in forecast.get("watts", {}).items():
+        if ts.startswith(today) and ts[11:13] == hh:
+            best = max(best, float(w))
+    return best / 1000.0
 
 
 def hourly_today(forecast: dict) -> list[dict]:

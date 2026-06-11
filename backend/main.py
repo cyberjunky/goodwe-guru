@@ -189,10 +189,12 @@ async def forecast_logger():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sunrise/sunset battery hold — hold the battery in daylight, discharge at night
+# Forecast-driven battery hold — hold while this hour's solar forecast is above
+# a threshold, discharge when below. Re-checks the cached forecast every 5 min.
 # ─────────────────────────────────────────────────────────────────────────────
-async def battery_sun_scheduler():
-    from battery_schedule import load_schedule, is_daytime
+async def battery_forecast_scheduler():
+    from battery_schedule import load_schedule
+    from forecast import current_hour_kwh
     from inverter_io import apply_setting
     last_dod = None
     await asyncio.sleep(60)
@@ -200,16 +202,18 @@ async def battery_sun_scheduler():
         try:
             sch = load_schedule()
             if sch.enabled and inverter is not None:
-                fc = load_forecast_config()
-                desired = sch.day_dod if is_daytime(fc.lat, fc.lon) else sch.night_dod
+                data = await fetch_forecast(load_forecast_config())   # cached (30 min)
+                producing = current_hour_kwh(data) >= float(sch.threshold_kwh)
+                desired = sch.day_dod if producing else sch.night_dod
                 if desired != last_dod:
                     await apply_setting(inverter, "dod", int(desired))
                     last_dod = desired
-                    log.info("Battery sun schedule: DoD → %d", desired)
+                    log.info("Battery forecast schedule: hour=%.2f kWh producing=%s DoD→%d",
+                             current_hour_kwh(data), producing, desired)
             else:
                 last_dod = None
         except Exception as e:
-            log.warning("battery_sun_scheduler: %s", e)
+            log.warning("battery_forecast_scheduler: %s", e)
         await asyncio.sleep(300)   # check every 5 min; writes only on transition
 
 
@@ -233,7 +237,7 @@ async def lifespan(_app: FastAPI):
         db=db,
     ))
     asyncio.create_task(forecast_logger())
-    asyncio.create_task(battery_sun_scheduler())
+    asyncio.create_task(battery_forecast_scheduler())
     yield
     db.close()
 
@@ -317,14 +321,17 @@ async def get_history_day(date: str | None = Query(None), _: str = Depends(requi
 
 @app.get("/api/battery-schedule")
 async def get_battery_schedule(_: str = Depends(require_auth)):
-    from battery_schedule import load_schedule, sun_times
-    out = asdict(load_schedule())
+    from battery_schedule import load_schedule
+    from forecast import current_hour_kwh
+    s = load_schedule()
+    out = asdict(s)
     try:
-        fc = load_forecast_config()
-        sr, ss = sun_times(fc.lat, fc.lon)
-        out["sunrise"], out["sunset"] = sr.isoformat(), ss.isoformat()
+        data = await fetch_forecast(load_forecast_config())
+        kwh = round(current_hour_kwh(data), 3)
+        out["hour_forecast_kwh"] = kwh
+        out["producing"] = kwh >= float(s.threshold_kwh)
     except Exception as e:
-        out["sun_error"] = str(e)
+        out["forecast_error"] = str(e)
     return out
 
 @app.post("/api/battery-schedule")

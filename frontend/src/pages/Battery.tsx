@@ -9,7 +9,7 @@ function DischargeControl() {
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
   const [dod, setDod] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
-  const [sched, setSched] = useState<{ enabled: boolean; sunrise?: string; sunset?: string } | null>(null)
+  const [sched, setSched] = useState<{ enabled: boolean; threshold_kwh: number; hour_forecast_kwh?: number; producing?: boolean } | null>(null)
 
   async function refresh() {
     try {
@@ -27,8 +27,15 @@ function DischargeControl() {
     setSched(s => s ? { ...s, enabled } : s)
     try { await fetch('/api/battery-schedule', { method: 'POST', headers, body: JSON.stringify({ enabled }) }) }
     catch { /* ignore */ }
+    refresh()
   }
-  const hhmm = (iso?: string) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'
+  async function setThreshold(v: number) {
+    if (isNaN(v)) return
+    setSched(s => s ? { ...s, threshold_kwh: v } : s)
+    try { await fetch('/api/battery-schedule', { method: 'POST', headers, body: JSON.stringify({ threshold_kwh: v }) }) }
+    catch { /* ignore */ }
+    refresh()
+  }
 
   async function apply(value: number) {
     setBusy(true)
@@ -67,19 +74,33 @@ function DischargeControl() {
         <b> Normal</b> lets the battery power the house down to 20%. (Writes the inverter's on-grid DoD.)
       </p>
 
-      {/* Auto sunrise/sunset schedule */}
-      <div className="border-t border-gray-800 pt-3 mt-1 flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm text-gray-200 flex items-center gap-2"><Sunrise size={14} /> Auto-hold during daylight</div>
-          <div className="text-[11px] text-gray-500 mt-0.5">
-            Holds the battery from sunrise to sunset, discharges at night. Tracks your location's sun times.
-            {sched?.sunrise && <> · ☀️ {hhmm(sched.sunrise)} → 🌙 {hhmm(sched.sunset)}</>}
+      {/* Auto forecast-driven schedule */}
+      <div className="border-t border-gray-800 pt-3 mt-1 space-y-2">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-sm text-gray-200 flex items-center gap-2"><Sunrise size={14} /> Auto-hold while solar is forecast</div>
+            <div className="text-[11px] text-gray-500 mt-0.5">
+              Holds the battery while the hourly solar forecast is above the threshold, discharges below it.
+            </div>
           </div>
+          <button onClick={() => toggleSchedule(!sched?.enabled)}
+            className={`relative inline-flex w-11 h-6 rounded-full transition-colors shrink-0 ${sched?.enabled ? 'bg-amber-500' : 'bg-gray-700'}`}>
+            <span className={`inline-block w-4 h-4 bg-white rounded-full shadow transform transition-transform mt-1 ${sched?.enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+          </button>
         </div>
-        <button onClick={() => toggleSchedule(!sched?.enabled)}
-          className={`relative inline-flex w-11 h-6 rounded-full transition-colors shrink-0 ${sched?.enabled ? 'bg-amber-500' : 'bg-gray-700'}`}>
-          <span className={`inline-block w-4 h-4 bg-white rounded-full shadow transform transition-transform mt-1 ${sched?.enabled ? 'translate-x-6' : 'translate-x-1'}`} />
-        </button>
+        <div className="flex items-center gap-2 text-xs text-gray-400">
+          <span>Threshold</span>
+          <input type="number" step="0.05" min="0" defaultValue={sched?.threshold_kwh ?? 0.1}
+            onBlur={e => setThreshold(parseFloat(e.target.value))}
+            className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-right text-white" />
+          <span>kWh/h</span>
+          {sched?.hour_forecast_kwh !== undefined && (
+            <span className="ml-auto text-gray-500">
+              now: <b className="text-gray-300">{sched.hour_forecast_kwh.toFixed(2)} kWh</b> →{' '}
+              <b style={{ color: sched.producing ? '#34d399' : '#fb923c' }}>{sched.producing ? 'Hold' : 'Discharge'}</b>
+            </span>
+          )}
+        </div>
       </div>
     </div>
   )
