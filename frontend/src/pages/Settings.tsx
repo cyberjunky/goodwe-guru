@@ -526,6 +526,7 @@ export default function Settings() {
 
   const wm = (local.work_mode as number) ?? 0
   const emsMode = (local.ems_mode as number) ?? 1
+  const isES = (settings.platform as string) === 'ES'
 
   const TABS: { key: SettingsTab; label: string; icon: React.ReactNode }[] = [
     { key: 'inverter',      label: 'Inverter',      icon: <SettingsIcon size={14} /> },
@@ -636,8 +637,10 @@ export default function Settings() {
             <GridSetting label="SoC Reserve" desc="Reserve for outages">
               <NumInput value={(local.battery_soc_protection as number) ?? 10} onChange={v => set('battery_soc_protection', v)} min={0} max={50} unit="%" />
             </GridSetting>
-            <GridSetting label="Backup / EPS" desc="Output on grid failure">
-              <Toggle checked={!!(local.backup_supply)} onChange={v => set('backup_supply', v)} />
+            <GridSetting label="Backup / EPS" desc={isES ? 'Read-only on ES — set in SolarGo' : 'Output on grid failure'}>
+              {isES
+                ? <span className="text-xs text-gray-400">{local.backup_supply ? 'On' : 'Off'} <span className="text-gray-600">(set in SolarGo)</span></span>
+                : <Toggle checked={!!(local.backup_supply)} onChange={v => set('backup_supply', v)} />}
             </GridSetting>
             <GridSetting label="Fast Charging" desc="Fast charge (FW19+)">
               <Toggle checked={!!(local.fast_charging)} onChange={v => set('fast_charging', v)} />
