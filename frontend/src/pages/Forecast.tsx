@@ -140,6 +140,7 @@ export default function Forecast() {
   const [loading, setLoading]     = useState(false)
   const [showConfig, setShowConfig] = useState(false)
   const [accuracy, setAccuracy]   = useState<{ days: AccuracyDay[]; bias_pct: number | null } | null>(null)
+  const [hold, setHold]           = useState<{ enabled: boolean; threshold_kwh: number } | null>(null)
   const token   = localStorage.getItem('gw_token') ?? ''
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
 
@@ -147,6 +148,7 @@ export default function Forecast() {
     loadConfig()
     loadForecast()
     fetch('/api/forecast/accuracy', { headers }).then(r => r.json()).then(setAccuracy).catch(() => {})
+    fetch('/api/battery-schedule', { headers }).then(r => r.json()).then(setHold).catch(() => {})
   }, [])
 
   async function loadConfig() {
@@ -286,6 +288,10 @@ export default function Forecast() {
               <Tooltip content={<ForecastTooltip />} />
               <ReferenceLine x={`${String(nowHour).padStart(2, '0')}:00`}
                 stroke="#6b7280" strokeDasharray="4 4" label={{ value: 'Now', fontSize: 10, fill: '#6b7280' }} />
+              {hold && hold.threshold_kwh > 0 && (
+                <ReferenceLine y={hold.threshold_kwh} stroke="#34d399" strokeDasharray="5 4"
+                  label={{ value: `hold ≥ ${hold.threshold_kwh} kWh${hold.enabled ? '' : ' (off)'}`, position: 'insideTopRight', fontSize: 10, fill: '#34d399' }} />
+              )}
               <Area type="monotone" dataKey="Forecast" stroke="#f59e0b" fill="url(#fc-grad)"
                 strokeWidth={2} dot={false} isAnimationActive={false} />
             </AreaChart>
