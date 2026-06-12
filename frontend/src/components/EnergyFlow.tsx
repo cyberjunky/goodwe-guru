@@ -8,11 +8,12 @@
 import { useEffect, useRef, useCallback } from 'react'
 
 interface Props {
-  ppv:      number   // W
-  pbattery: number   // W positive=charging, negative=discharging
-  pgrid:    number   // W positive=importing, negative=exporting
-  pload:    number   // W
-  soc:      number   // %
+  ppv:              number   // W
+  pbattery:         number   // W positive=charging, negative=discharging
+  pgrid:            number   // W positive=importing, negative=exporting
+  pload:            number   // W
+  soc:              number   // %
+  deviceTrackedW?:  number   // W — tracked devices total (optional)
 }
 
 // ── Layout (logical px — canvas + SVG share same coordinate space) ──────────
@@ -109,7 +110,7 @@ function HomeIcon({ c }: { c: string }) {
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
-export default function EnergyFlow({ ppv, pbattery, pgrid, pload, soc }: Props) {
+export default function EnergyFlow({ ppv, pbattery, pgrid, pload, soc, deviceTrackedW }: Props) {
   const canvasRef  = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const scaleRef   = useRef({ x: 1, y: 1 })   // canvas-px per logical-px
@@ -334,6 +335,18 @@ export default function EnergyFlow({ ppv, pbattery, pgrid, pload, soc }: Props) 
             fontFamily="system-ui,sans-serif">{fmt(pload)}</text>
           <text x={NODE.home.x} y={NODE.home.y - NR - 10} textAnchor="middle"
             fontSize="10" fill="#4a6a85" fontFamily="system-ui,sans-serif">Home</text>
+          {!!deviceTrackedW && deviceTrackedW > 10 && (
+            <text x={NODE.home.x} y={NODE.home.y + NR + 16} textAnchor="middle"
+              fontSize="9" fill="#7c5cbf" fontFamily="system-ui,sans-serif">
+              {fmt(deviceTrackedW)} tracked
+            </text>
+          )}
+          {!!deviceTrackedW && deviceTrackedW > 10 && pload - deviceTrackedW > 20 && (
+            <text x={NODE.home.x} y={NODE.home.y + NR + 28} textAnchor="middle"
+              fontSize="9" fill="#2a3f55" fontFamily="system-ui,sans-serif">
+              {fmt(pload - deviceTrackedW)} other
+            </text>
+          )}
 
           {/* ── Battery ────────────────────────────────── */}
           <circle cx={NODE.bat.x} cy={NODE.bat.y} r={NR}

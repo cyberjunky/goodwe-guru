@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useInverter } from '../context/InverterContext'
-import { Settings as SettingsIcon, Save, RefreshCw, AlertCircle, Euro, Bell, Send, CheckCircle2, DownloadCloud, GitCommit, Server, FileText } from 'lucide-react'
+import { Settings as SettingsIcon, Save, RefreshCw, AlertCircle, Euro, Bell, Send, CheckCircle2, DownloadCloud, GitCommit, Server, FileText, Cpu, Plus, Pencil, Trash2, X, Check } from 'lucide-react'
 
 const WORK_MODES = [
   { value: 0, label: 'General Mode', desc: 'Standard grid-tied — charges from PV, exports excess' },
@@ -380,7 +380,220 @@ function NotificationSettings() {
   )
 }
 
-type SettingsTab = 'inverter' | 'tariffs' | 'notifications' | 'system'
+// ─────────────────────────────────────────────────────────────────────────────
+// Device power tracking panel
+// ─────────────────────────────────────────────────────────────────────────────
+interface DeviceEntry {
+  id: string; name: string; ip: string; mac: string
+  always_on: boolean; power_on: number; power_off: number
+  enabled: boolean; icon: string; on: boolean; current_w: number
+}
+
+const DEVICE_ICONS = ['🔌', '💡', '🖥️', '📺', '❄️', '🔥', '🎮', '🖨️', '📡', '🫙', '🚿', '🧊', '⚡', '🏠', '🎵', '🧺', '🍳', '💻']
+
+function DeviceSettings() {
+  const token   = localStorage.getItem('gw_token') ?? ''
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  const [devices, setDevices]   = useState<DeviceEntry[]>([])
+  const [editing, setEditing]   = useState<Partial<DeviceEntry> | null>(null)
+  const [saving, setSaving]     = useState(false)
+
+  async function load() {
+    const r = await fetch('/api/devices', { headers })
+    if (r.ok) setDevices(await r.json())
+  }
+
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 10000)
+    return () => clearInterval(t)
+  }, [])
+
+  function startNew() {
+    setEditing({ name: '', ip: '', mac: '', always_on: false, power_on: 0, power_off: 0, enabled: true, icon: '🔌' })
+  }
+
+  async function saveDevice() {
+    if (!editing || !editing.name) return
+    setSaving(true)
+    if (editing.id) {
+      await fetch(`/api/devices/${editing.id}`, { method: 'PUT', headers, body: JSON.stringify(editing) })
+    } else {
+      await fetch('/api/devices', { method: 'POST', headers, body: JSON.stringify(editing) })
+    }
+    setSaving(false); setEditing(null); load()
+  }
+
+  async function deleteDevice(id: string) {
+    if (!confirm('Delete this device?')) return
+    await fetch(`/api/devices/${id}`, { method: 'DELETE', headers })
+    load()
+  }
+
+  function fmtW(w: number) { return w >= 1000 ? `${(w / 1000).toFixed(2)} kW` : `${Math.round(w)} W` }
+
+  const totalTracked = devices.filter(d => d.enabled).reduce((s, d) => s + d.current_w, 0)
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-300 flex items-center gap-2">
+            <Cpu size={15} /> Devices
+          </h2>
+          <p className="text-[11px] text-gray-500 mt-0.5">Track consumption per device — detected via ping or ARP, or always-on.</p>
+        </div>
+        <button onClick={startNew}
+          className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs px-3 py-1.5 rounded-lg transition-colors">
+          <Plus size={12} /> Add Device
+        </button>
+      </div>
+
+      {totalTracked > 0 && (
+        <div className="bg-violet-500/10 border border-violet-500/20 rounded-xl p-3 flex items-center gap-3 text-xs">
+          <span className="text-violet-400 font-medium">Total tracked</span>
+          <span className="text-violet-200 font-bold text-sm">{fmtW(totalTracked)}</span>
+          <span className="text-gray-600">·</span>
+          <span className="text-gray-500">{devices.filter(d => d.enabled && d.on).length} active devices</span>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {devices.length === 0 && (
+          <div className="text-center py-10 text-gray-600 text-sm">
+            No devices yet — add one to see where the power goes.
+          </div>
+        )}
+        {devices.map(d => (
+          <div key={d.id}
+            className={`bg-gray-900 border rounded-xl p-3 flex items-center gap-3 transition-opacity ${d.enabled ? 'border-gray-800' : 'border-gray-800/40 opacity-50'}`}>
+            <div className="text-xl w-8 text-center shrink-0">{d.icon || '🔌'}</div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium text-gray-200 truncate">{d.name}</span>
+                <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ${d.on ? 'bg-emerald-500/15 text-emerald-400' : 'bg-gray-700/60 text-gray-500'}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full inline-block ${d.on ? 'bg-emerald-400' : 'bg-gray-600'}`} />
+                  {d.on ? 'On' : 'Off'}
+                </span>
+                {d.enabled && (
+                  <span className="text-xs font-semibold text-violet-300 shrink-0">{fmtW(d.current_w)}</span>
+                )}
+              </div>
+              <div className="text-[10px] text-gray-600 mt-0.5">
+                {d.always_on ? 'Always on' : d.ip ? `ping ${d.ip}` : d.mac ? `arp ${d.mac}` : 'no detection'}
+                {' · '}on: {d.power_on} W · standby: {d.power_off} W
+              </div>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button onClick={() => setEditing({ ...d })}
+                className="text-gray-600 hover:text-gray-300 transition-colors p-1.5 rounded-lg hover:bg-gray-800">
+                <Pencil size={13} />
+              </button>
+              <button onClick={() => deleteDevice(d.id)}
+                className="text-gray-600 hover:text-red-400 transition-colors p-1.5 rounded-lg hover:bg-gray-800">
+                <Trash2 size={13} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {editing && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={e => { if (e.target === e.currentTarget) setEditing(null) }}>
+          <div className="bg-[#0c1525] border border-[#18283d] rounded-2xl p-6 w-full max-w-md space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-200">{editing.id ? 'Edit Device' : 'Add Device'}</h3>
+              <button onClick={() => setEditing(null)} className="text-gray-500 hover:text-gray-300 transition-colors"><X size={16} /></button>
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-500 block mb-2">Icon</label>
+              <div className="flex flex-wrap gap-1.5">
+                {DEVICE_ICONS.map(ic => (
+                  <button key={ic} onClick={() => setEditing(e => ({ ...e!, icon: ic }))}
+                    className={`text-lg w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${editing.icon === ic ? 'bg-violet-500/30 ring-1 ring-violet-500' : 'bg-gray-800 hover:bg-gray-700'}`}>
+                    {ic}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">Name</label>
+              <input value={editing.name ?? ''} onChange={e => setEditing(ev => ({ ...ev!, name: e.target.value }))}
+                placeholder="TV, Dishwasher, …"
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-violet-500" />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs text-gray-500 block">Detection</label>
+              <div className="flex items-center gap-3 py-1">
+                <span className="text-xs text-gray-400 w-20">Always on</span>
+                <button onClick={() => setEditing(e => ({ ...e!, always_on: !e!.always_on }))}
+                  className={`relative inline-flex w-10 h-5 rounded-full transition-colors ${editing.always_on ? 'bg-violet-500' : 'bg-gray-700'}`}>
+                  <span className={`inline-block w-3 h-3 bg-white rounded-full shadow transform transition-transform mt-1 ${editing.always_on ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+              {!editing.always_on && (
+                <>
+                  <div>
+                    <label className="text-xs text-gray-500 block mb-1">IP address <span className="text-gray-600">(ping to detect on/off)</span></label>
+                    <input value={editing.ip ?? ''} onChange={e => setEditing(ev => ({ ...ev!, ip: e.target.value }))}
+                      placeholder="192.168.1.x"
+                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500 block mb-1">MAC address <span className="text-gray-600">(ARP fallback)</span></label>
+                    <input value={editing.mac ?? ''} onChange={e => setEditing(ev => ({ ...ev!, mac: e.target.value }))}
+                      placeholder="aa:bb:cc:dd:ee:ff"
+                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Power when ON (W)</label>
+                <input type="number" min={0} value={editing.power_on ?? 0}
+                  onChange={e => setEditing(ev => ({ ...ev!, power_on: +e.target.value }))}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-violet-500" />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Standby / OFF (W)</label>
+                <input type="number" min={0} value={editing.power_off ?? 0}
+                  onChange={e => setEditing(ev => ({ ...ev!, power_off: +e.target.value }))}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-violet-500" />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-gray-400">Enabled</span>
+              <button onClick={() => setEditing(e => ({ ...e!, enabled: !e!.enabled }))}
+                className={`relative inline-flex w-10 h-5 rounded-full transition-colors ${editing.enabled !== false ? 'bg-violet-500' : 'bg-gray-700'}`}>
+                <span className={`inline-block w-3 h-3 bg-white rounded-full shadow transform transition-transform mt-1 ${editing.enabled !== false ? 'translate-x-6' : 'translate-x-1'}`} />
+              </button>
+            </div>
+
+            <div className="flex gap-3 justify-end pt-1">
+              <button onClick={() => setEditing(null)}
+                className="text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5 rounded-lg border border-gray-700 transition-colors">
+                Cancel
+              </button>
+              <button onClick={saveDevice} disabled={saving || !editing.name}
+                className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs px-4 py-1.5 rounded-lg transition-colors">
+                {saving ? <RefreshCw size={12} className="animate-spin" /> : <Check size={12} />}
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+type SettingsTab = 'inverter' | 'tariffs' | 'notifications' | 'devices' | 'system'
 
 interface VersionInfo { commit?: string; branch?: string; date?: string; subject?: string }
 type UpdateState = 'idle' | 'requested' | 'running' | 'ok' | 'failed'
@@ -532,6 +745,7 @@ export default function Settings() {
     { key: 'inverter',      label: 'Inverter',      icon: <SettingsIcon size={14} /> },
     { key: 'tariffs',       label: 'Tariffs',       icon: <Euro size={14} /> },
     { key: 'notifications', label: 'Notifications', icon: <Bell size={14} /> },
+    { key: 'devices',       label: 'Devices',       icon: <Cpu size={14} /> },
     { key: 'system',        label: 'System',        icon: <Server size={14} /> },
   ]
 
@@ -549,6 +763,7 @@ export default function Settings() {
 
       {tab === 'tariffs'       && <TariffSettings />}
       {tab === 'notifications' && <NotificationSettings />}
+      {tab === 'devices'       && <DeviceSettings />}
       {tab === 'system'        && <SystemSettings />}
       {tab === 'inverter'      && <>
       <div className="flex items-center justify-between">

@@ -33,6 +33,7 @@ from tariffs import load_tariffs, save_tariffs, calc_financials
 from forecast import load_forecast_config, save_forecast_config, fetch_forecast, hourly_today, daily_forecast, clear_cache as clear_forecast_cache
 from notifications import load_notification_config, save_notification_config, check_and_notify, send_telegram
 import automations as auto_engine
+import devices as dev_engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -131,6 +132,10 @@ async def poll_inverter():
             data = {str(k): (v.value if hasattr(v, "value") else v) for k, v in raw.items()}
             data = normalise(data)
             data.update(bms_data)
+            try:
+                data["device_tracked_w"] = dev_engine.get_tracked_power()["total_w"]
+            except Exception:
+                pass
             latest_data = data
             consecutive_errors = 0
         except Exception as e:
@@ -258,6 +263,7 @@ async def lifespan(_app: FastAPI):
     ))
     asyncio.create_task(forecast_logger())
     asyncio.create_task(battery_forecast_scheduler())
+    asyncio.create_task(dev_engine.poll_devices_loop())
     yield
     db.close()
 
@@ -851,6 +857,55 @@ async def create_from_template(body: dict, _: str = Depends(require_auth)):
     autos.extend(created)
     auto_engine.save(autos)
     return [asdict(c) for c in created]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Devices — power tracking per device (ping / ARP / always-on)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/devices")
+async def get_devices(_: str = Depends(require_auth)):
+    devs = dev_engine.load_devices()
+    result = []
+    for d in devs:
+        item = asdict(d)
+        on = dev_engine.device_states.get(d.id, d.always_on)
+        item["on"] = on
+        item["current_w"] = d.power_on if on else d.power_off
+        result.append(item)
+    return result
+
+@app.post("/api/devices")
+async def create_device(body: dict, _: str = Depends(require_auth)):
+    devs = dev_engine.load_devices()
+    d = dev_engine.Device()
+    d.id = dev_engine.new_id()
+    for k, v in body.items():
+        if hasattr(d, k) and k != "id":
+            setattr(d, k, v)
+    devs.append(d)
+    dev_engine.save_devices(devs)
+    return asdict(d)
+
+@app.put("/api/devices/{did}")
+async def update_device(did: str, body: dict, _: str = Depends(require_auth)):
+    devs = dev_engine.load_devices()
+    for d in devs:
+        if d.id == did:
+            for k, v in body.items():
+                if hasattr(d, k) and k != "id":
+                    setattr(d, k, v)
+            dev_engine.save_devices(devs)
+            return asdict(d)
+    raise HTTPException(404, "Not found")
+
+@app.delete("/api/devices/{did}")
+async def delete_device(did: str, _: str = Depends(require_auth)):
+    devs = dev_engine.load_devices()
+    devs = [d for d in devs if d.id != did]
+    dev_engine.save_devices(devs)
+    dev_engine.device_states.pop(did, None)
+    return {"ok": True}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -133,6 +133,7 @@ export default function Dashboard() {
   const pbat  = (data.pbattery1 as number) ?? 0
   const pload = (data.load_ptotal as number) ?? 0
   const soc   = (data.battery_soc as number) ?? 0
+  const deviceTrackedW = (data.device_tracked_w as number) ?? 0
   const eDay  = (data.e_day     as number) ?? 0
   const eDayImp = (data.e_day_imp as number) ?? 0
   const eDayExp = (data.e_day_exp as number) ?? 0
@@ -197,7 +198,7 @@ export default function Dashboard() {
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
 
         {/* Energy flow */}
-        <EnergyFlow ppv={ppv} pbattery={pbat} pgrid={pgrid} pload={pload} soc={soc}/>
+        <EnergyFlow ppv={ppv} pbattery={pbat} pgrid={pgrid} pload={pload} soc={soc} deviceTrackedW={deviceTrackedW}/>
 
         {/* Right panel: inverter stats + totals */}
         <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
