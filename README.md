@@ -100,18 +100,8 @@ Per-cell data connects via WebSocket `/ws/bms` and is merged into the live strea
 
 ## Install on Proxmox VE
 
-### Option A — repo is public
-
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/cyberjunky/goodwe-guru/main/install.sh)
-```
-
-### Option B — repo is private (clone first)
-
-```bash
-# On your Proxmox host or inside an existing Debian container:
-git clone https://github.com/cyberjunky/goodwe-guru.git
-bash goodwe-guru/install.sh
 ```
 
 The script will ask for your inverter IP, a password, and an optional domain name for HTTPS.  

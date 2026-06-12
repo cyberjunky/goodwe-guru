@@ -228,16 +228,39 @@ export default function Battery() {
         </div>
       )}
 
-      {/* External BMS (BeagleBone CAN) */}
-      <div className="bg-gray-900 border border-dashed border-gray-700 rounded-2xl p-6">
-        <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
-          <Cpu size={14} /> External BMS (CAN Bus via BeagleBone)
-        </h2>
-        <p className="text-xs text-gray-600">
-          Per-cell data from the RS485/CAN interface will appear here once the BeagleBone bridge is connected.
-          Data streams via WebSocket to <code className="bg-gray-800 px-1 rounded">/ws/bms</code>.
-        </p>
-      </div>
+      {/* External BMS (BeagleBone RS485) — renders any bms_ext_* fields the bridge sends */}
+      {(() => {
+        const ext = Object.entries(data as Record<string, unknown>)
+          .filter(([k, v]) => k.startsWith('bms_ext_') && v !== undefined && v !== null)
+        return (
+          <div className="bg-gray-900 border border-dashed border-gray-700 rounded-2xl p-6">
+            <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3 flex items-center gap-2">
+              <Cpu size={14} /> External BMS (RS485 via BeagleBone)
+            </h2>
+            {ext.length === 0 ? (
+              <p className="text-xs text-gray-600">
+                Per-pack data appears here once the BeagleBone bridge is connected.
+                It streams JSON to <code className="bg-gray-800 px-1 rounded">/ws/bms</code> (keys prefixed <code className="bg-gray-800 px-1 rounded">bms_ext_</code>).
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {ext.map(([k, v]) => {
+                  const label = k.replace('bms_ext_', '').replace(/_/g, ' ')
+                  const val = Array.isArray(v)
+                    ? `${(v as number[]).length}× ${Math.min(...(v as number[]))}–${Math.max(...(v as number[]))}`
+                    : String(v)
+                  return (
+                    <div key={k} className="bg-gray-800 border border-gray-700 rounded-lg p-3">
+                      <div className="text-xs text-gray-500 mb-1 capitalize">{label}</div>
+                      <div className="text-sm font-medium text-white break-words">{val}</div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )
+      })()}
     </div>
   )
 }
