@@ -1,14 +1,19 @@
 """
 Device power tracking — ping/ARP detection + static power values.
 Writes to devices.json in the data dir. Polled every 10 s.
+PowerCalc community library search: https://api.powercalc.nl/library
 """
 
 import asyncio
 import json
 import logging
+import platform
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+import httpx
 
 from config import settings as cfg
 
@@ -56,8 +61,12 @@ def new_id() -> str:
 
 async def ping_host(ip: str) -> bool:
     try:
+        if platform.system() == "Windows":
+            args = ["ping", "-n", "1", "-w", "1000", ip]
+        else:
+            args = ["ping", "-c", "1", "-W", "1", ip]
         proc = await asyncio.create_subprocess_exec(
-            "ping", "-c", "1", "-W", "1", ip,
+            *args,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -115,3 +124,52 @@ def get_tracked_power() -> dict:
         total += w
         items.append({"id": d.id, "name": d.name, "icon": d.icon, "on": on, "power_w": w})
     return {"total_w": round(total), "devices": items}
+
+
+# ── PowerCalc community library search ────────────────────────────────────────
+POWERCALC_API = "https://api.powercalc.nl/library"
+_library_cache: list[dict] = []
+_library_fetched_at: float = 0.0
+_LIBRARY_TTL = 86400.0  # 24 h
+
+
+async def _ensure_library() -> list[dict]:
+    global _library_cache, _library_fetched_at
+    if _library_cache and time.monotonic() - _library_fetched_at < _LIBRARY_TTL:
+        return _library_cache
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(POWERCALC_API)
+            r.raise_for_status()
+            data = r.json()
+        flat: list[dict] = []
+        for mfr in data.get("manufacturers", []):
+            mname = mfr.get("full_name", mfr.get("dir_name", ""))
+            for model in mfr.get("models", []):
+                flat.append({
+                    "manufacturer": mname,
+                    "name":         model.get("name", ""),
+                    "device_type":  model.get("device_type", ""),
+                    "standby_power": model.get("standby_power"),
+                    "max_power":    model.get("max_power"),
+                })
+        _library_cache = flat
+        _library_fetched_at = time.monotonic()
+        log.info("PowerCalc library loaded: %d models", len(flat))
+    except Exception as e:
+        log.warning("PowerCalc library fetch failed: %s", e)
+    return _library_cache
+
+
+async def search_library(q: str, limit: int = 25) -> list[dict]:
+    if not q.strip():
+        return []
+    terms = q.lower().split()
+    results = []
+    for entry in await _ensure_library():
+        haystack = f"{entry['manufacturer']} {entry['name']}".lower()
+        if all(t in haystack for t in terms):
+            results.append(entry)
+            if len(results) >= limit:
+                break
+    return results

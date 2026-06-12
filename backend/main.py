@@ -907,6 +907,10 @@ async def delete_device(did: str, _: str = Depends(require_auth)):
     dev_engine.device_states.pop(did, None)
     return {"ok": True}
 
+@app.get("/api/devices/library-search")
+async def devices_library_search(q: str = Query(""), _: str = Depends(require_auth)):
+    return await dev_engine.search_library(q)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Serve built frontend
