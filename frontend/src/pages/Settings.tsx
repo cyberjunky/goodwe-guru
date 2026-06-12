@@ -385,6 +385,7 @@ function NotificationSettings() {
 // ─────────────────────────────────────────────────────────────────────────────
 interface DeviceEntry {
   id: string; name: string; ip: string; mac: string
+  url: string; wmi_host: string
   always_on: boolean; power_on: number; power_off: number
   enabled: boolean; icon: string; on: boolean; current_w: number
 }
@@ -416,7 +417,7 @@ function DeviceSettings() {
   }, [])
 
   function startNew() {
-    setEditing({ name: '', ip: '', mac: '', always_on: false, power_on: 0, power_off: 0, enabled: true, icon: '🔌' })
+    setEditing({ name: '', ip: '', mac: '', url: '', wmi_host: '', always_on: false, power_on: 0, power_off: 0, enabled: true, icon: '🔌' })
   }
 
   async function saveDevice() {
@@ -509,7 +510,12 @@ function DeviceSettings() {
                 )}
               </div>
               <div className="text-[10px] text-gray-600 mt-0.5">
-                {d.always_on ? 'Always on' : d.ip ? `ping ${d.ip}` : d.mac ? `arp ${d.mac}` : 'no detection'}
+                {d.always_on ? 'Always on'
+                  : d.url      ? `http ${d.url}`
+                  : d.ip       ? `ping ${d.ip}`
+                  : d.mac      ? `arp ${d.mac}`
+                  : d.wmi_host ? `wmi ${d.wmi_host}`
+                  : 'no detection'}
                 {' · '}on: {d.power_on} W · standby: {d.power_off} W
               </div>
             </div>
@@ -603,15 +609,27 @@ function DeviceSettings() {
               {!editing.always_on && (
                 <>
                   <div>
-                    <label className="text-xs text-gray-500 block mb-1">IP address <span className="text-gray-600">(ping to detect on/off)</span></label>
+                    <label className="text-xs text-gray-500 block mb-1">IP address <span className="text-gray-600">(ping)</span></label>
                     <input value={editing.ip ?? ''} onChange={e => setEditing(ev => ({ ...ev!, ip: e.target.value }))}
                       placeholder="192.168.1.x"
                       className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500 block mb-1">MAC address <span className="text-gray-600">(ARP fallback)</span></label>
+                    <label className="text-xs text-gray-500 block mb-1">MAC address <span className="text-gray-600">(ARP — fallback to IP)</span></label>
                     <input value={editing.mac ?? ''} onChange={e => setEditing(ev => ({ ...ev!, mac: e.target.value }))}
                       placeholder="aa:bb:cc:dd:ee:ff"
+                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500 block mb-1">URL <span className="text-gray-600">(HTTP probe — any response = online)</span></label>
+                    <input value={editing.url ?? ''} onChange={e => setEditing(ev => ({ ...ev!, url: e.target.value }))}
+                      placeholder="http://192.168.1.x:8080"
+                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500 block mb-1">WMI host <span className="text-gray-600">(Windows only — hostname or IP)</span></label>
+                    <input value={editing.wmi_host ?? ''} onChange={e => setEditing(ev => ({ ...ev!, wmi_host: e.target.value }))}
+                      placeholder="DESKTOP-PC or 192.168.1.x"
                       className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
                   </div>
                 </>

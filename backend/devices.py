@@ -28,6 +28,8 @@ class Device:
     name: str = "Device"
     ip: str = ""           # ping this IP to detect on/off
     mac: str = ""          # fallback: check ARP table for MAC
+    url: str = ""          # HTTP probe: GET → any response = online
+    wmi_host: str = ""     # Windows WMI host (Windows runner only)
     always_on: bool = False
     power_on: float = 0.0  # W when active
     power_off: float = 0.0 # W standby
@@ -84,13 +86,48 @@ def arp_has_mac(mac: str) -> bool:
         return False
 
 
+async def http_check(url: str) -> bool:
+    """True if the URL returns any HTTP response (device has a web interface)."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as client:
+            r = await client.get(url)
+            return r.status_code < 600
+    except Exception:
+        return False
+
+
+async def wmi_check(host: str) -> bool:
+    """
+    Windows-only: query remote host via WMI using PowerShell.
+    Returns False on non-Windows or if the host is unreachable.
+    """
+    if platform.system() != "Windows":
+        log.debug("wmi_check: skipped on non-Windows for host %s", host)
+        return False
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "powershell", "-NonInteractive", "-Command",
+            f"(Get-WmiObject -ComputerName '{host}' -Class Win32_ComputerSystem -ErrorAction Stop).Name",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8.0)
+        return proc.returncode == 0 and bool(stdout.strip())
+    except Exception:
+        return False
+
+
 async def check_device(device: Device) -> bool:
     if device.always_on:
         return True
+    if device.url:
+        return await http_check(device.url)
     if device.ip:
         return await ping_host(device.ip)
     if device.mac:
         return arp_has_mac(device.mac)
+    if device.wmi_host:
+        return await wmi_check(device.wmi_host)
     return True  # no detection method → assume on
 
 
