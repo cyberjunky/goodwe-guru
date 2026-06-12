@@ -1,5 +1,6 @@
 import { useInverter } from '../context/InverterContext'
 import EnergyFlow from '../components/EnergyFlow'
+import DeviceBreakdown from '../components/DeviceBreakdown'
 import Flow from './Flow'
 import { fmtEnergy } from '../lib/format'
 import { Sun, Battery, Zap, Home, Activity, Clock, Thermometer, Waves } from 'lucide-react'
@@ -225,6 +226,9 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* ── Device breakdown ───────────────────────────────────────── */}
+      <DeviceBreakdown pload={pload} />
 
       {/* ── Live chart ─────────────────────────────────────────────── */}
       <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px 10px' }}>
