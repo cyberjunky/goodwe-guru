@@ -22,17 +22,18 @@ DATA_DIR = Path(cfg.db_path).resolve().parent
 DEVICES_FILE = DATA_DIR / "devices.json"
 
 
-DETECTION_METHODS = ("ping", "arp", "http", "wmi", "always_on", "none")
+DETECTION_METHODS = ("ping", "tcp", "arp", "http", "wmi", "always_on", "none")
 
 @dataclass
 class Device:
     id: str = ""
     name: str = "Device"
     detection: str = "ping"  # one of DETECTION_METHODS
-    ip: str = ""             # used by: ping
+    ip: str = ""             # used by: ping, tcp
     mac: str = ""            # used by: arp
     url: str = ""            # used by: http
     wmi_host: str = ""       # used by: wmi
+    tcp_port: int = 80       # used by: tcp
     power_on: float = 0.0    # W when active
     power_off: float = 0.0   # W standby
     enabled: bool = True
@@ -94,6 +95,22 @@ def arp_has_mac(mac: str) -> bool:
         return False
 
 
+async def tcp_check(host: str, port: int) -> bool:
+    """True if a TCP connection to host:port succeeds. Works for routers/switches that block ICMP."""
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=3.0
+        )
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
 async def http_check(url: str) -> bool:
     """True if the URL returns any HTTP response (device has a web interface).
     SSL verification disabled — self-signed certs (NAS, Proxmox, routers) are fine."""
@@ -131,6 +148,7 @@ async def check_device(device: Device) -> bool:
     if m == "always_on":  return True
     if m == "none":       return False
     if m == "ping":       return await ping_host(device.ip) if device.ip else False
+    if m == "tcp":        return await tcp_check(device.ip, device.tcp_port) if device.ip else False
     if m == "arp":        return arp_has_mac(device.mac)    if device.mac else False
     if m == "http":       return await http_check(device.url) if device.url else False
     if m == "wmi":        return await wmi_check(device.wmi_host) if device.wmi_host else False

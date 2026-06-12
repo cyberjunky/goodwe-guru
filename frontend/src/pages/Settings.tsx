@@ -383,23 +383,24 @@ function NotificationSettings() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Device power tracking panel
 // ─────────────────────────────────────────────────────────────────────────────
-type DetectionMethod = 'ping' | 'arp' | 'http' | 'wmi' | 'always_on' | 'none'
+type DetectionMethod = 'ping' | 'tcp' | 'arp' | 'http' | 'wmi' | 'always_on' | 'none'
 
 interface DeviceEntry {
   id: string; name: string
   detection: DetectionMethod
-  ip: string; mac: string; url: string; wmi_host: string
+  ip: string; mac: string; url: string; wmi_host: string; tcp_port: number
   power_on: number; power_off: number
   enabled: boolean; icon: string; on: boolean; current_w: number
 }
 
-const DETECTION_OPTS: { value: DetectionMethod; label: string; desc: string; field: string | null }[] = [
-  { value: 'ping',      label: 'Ping',      desc: 'ICMP ping to IP address',          field: 'IP address'   },
-  { value: 'arp',       label: 'ARP',       desc: 'Check ARP table for MAC address',  field: 'MAC address'  },
-  { value: 'http',      label: 'HTTP',      desc: 'GET request — any response = on',  field: 'URL'          },
-  { value: 'wmi',       label: 'WMI',       desc: 'Windows WMI query (Win host only)',field: 'WMI host'     },
-  { value: 'always_on', label: 'Always on', desc: 'Assume always on, no check',       field: null           },
-  { value: 'none',      label: 'None',      desc: 'Always off — track standby only',  field: null           },
+const DETECTION_OPTS: { value: DetectionMethod; label: string; desc: string }[] = [
+  { value: 'ping',      label: 'Ping',      desc: 'ICMP — blocked by most routers'   },
+  { value: 'tcp',       label: 'TCP',       desc: 'Connect to port — works on routers'},
+  { value: 'arp',       label: 'ARP',       desc: 'ARP table MAC lookup'              },
+  { value: 'http',      label: 'HTTP',      desc: 'GET request, any reply = on'       },
+  { value: 'wmi',       label: 'WMI',       desc: 'Windows WMI (Win host only)'       },
+  { value: 'always_on', label: 'Always on', desc: 'No check, assume on'               },
+  { value: 'none',      label: 'None',      desc: 'Track standby only'                },
 ]
 
 const DEVICE_ICONS = ['🔌', '💡', '🖥️', '📺', '❄️', '🔥', '🎮', '🖨️', '📡', '🫙', '🚿', '🧊', '⚡', '🏠', '🎵', '🧺', '🍳', '💻']
@@ -429,7 +430,7 @@ function DeviceSettings() {
   }, [])
 
   function startNew() {
-    setEditing({ name: '', detection: 'ping', ip: '', mac: '', url: '', wmi_host: '', power_on: 0, power_off: 0, enabled: true, icon: '🔌' })
+    setEditing({ name: '', detection: 'ping', ip: '', mac: '', url: '', wmi_host: '', tcp_port: 80, power_on: 0, power_off: 0, enabled: true, icon: '🔌' })
   }
 
   async function saveDevice() {
@@ -525,6 +526,7 @@ function DeviceSettings() {
                 {d.detection === 'always_on' ? 'Always on'
                   : d.detection === 'none'     ? 'Standby only'
                   : d.detection === 'ping'     ? `ping ${d.ip}`
+                  : d.detection === 'tcp'      ? `tcp ${d.ip}:${d.tcp_port}`
                   : d.detection === 'arp'      ? `arp ${d.mac}`
                   : d.detection === 'http'     ? `http ${d.url}`
                   : d.detection === 'wmi'      ? `wmi ${d.wmi_host}`
@@ -612,7 +614,7 @@ function DeviceSettings() {
 
             <div className="space-y-2">
               <label className="text-xs text-gray-500 block">Detection method</label>
-              <div className="grid grid-cols-3 gap-1.5">
+              <div className="grid grid-cols-4 gap-1.5">
                 {DETECTION_OPTS.map(opt => (
                   <button key={opt.value}
                     onClick={() => setEditing(e => ({ ...e!, detection: opt.value }))}
@@ -626,6 +628,17 @@ function DeviceSettings() {
                 <input value={editing.ip ?? ''} onChange={e => setEditing(ev => ({ ...ev!, ip: e.target.value }))}
                   placeholder="IP address — 192.168.1.x"
                   className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
+              )}
+              {editing.detection === 'tcp' && (
+                <div className="flex gap-2">
+                  <input value={editing.ip ?? ''} onChange={e => setEditing(ev => ({ ...ev!, ip: e.target.value }))}
+                    placeholder="IP address — 192.168.2.254"
+                    className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
+                  <input type="number" min={1} max={65535} value={editing.tcp_port ?? 80}
+                    onChange={e => setEditing(ev => ({ ...ev!, tcp_port: +e.target.value }))}
+                    className="w-20 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500"
+                    title="TCP port" />
+                </div>
               )}
               {editing.detection === 'arp' && (
                 <input value={editing.mac ?? ''} onChange={e => setEditing(ev => ({ ...ev!, mac: e.target.value }))}
