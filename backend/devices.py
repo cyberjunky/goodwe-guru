@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import platform
+import subprocess
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -70,19 +71,26 @@ def new_id() -> str:
     return str(uuid.uuid4())[:8]
 
 
-async def ping_host(ip: str) -> bool:
+def _ping_sync(ip: str) -> bool:
+    """Blocking ping — run via executor so it works on any event loop."""
+    if platform.system() == "Windows":
+        args = ["ping", "-n", "1", "-w", "1000", ip]
+    else:
+        args = ["ping", "-c", "1", "-W", "1", ip]
     try:
-        if platform.system() == "Windows":
-            args = ["ping", "-n", "1", "-w", "1000", ip]
-        else:
-            args = ["ping", "-c", "1", "-W", "1", ip]
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+        r = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+async def ping_host(ip: str) -> bool:
+    loop = asyncio.get_event_loop()
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, _ping_sync, ip),
+            timeout=5.0,
         )
-        await asyncio.wait_for(proc.wait(), timeout=3.0)
-        return proc.returncode == 0
     except Exception:
         return False
 
@@ -122,23 +130,29 @@ async def http_check(url: str) -> bool:
         return False
 
 
-async def wmi_check(host: str) -> bool:
-    """
-    Windows-only: query remote host via WMI using PowerShell.
-    Returns False on non-Windows or if the host is unreachable.
-    """
+def _wmi_sync(host: str) -> bool:
     if platform.system() != "Windows":
-        log.debug("wmi_check: skipped on non-Windows for host %s", host)
         return False
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "powershell", "-NonInteractive", "-Command",
-            f"(Get-WmiObject -ComputerName '{host}' -Class Win32_ComputerSystem -ErrorAction Stop).Name",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+        r = subprocess.run(
+            ["powershell", "-NonInteractive", "-Command",
+             f"(Get-WmiObject -ComputerName '{host}' -Class Win32_ComputerSystem -ErrorAction Stop).Name"],
+            capture_output=True, timeout=8,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8.0)
-        return proc.returncode == 0 and bool(stdout.strip())
+        return r.returncode == 0 and bool(r.stdout.strip())
+    except Exception:
+        return False
+
+
+async def wmi_check(host: str) -> bool:
+    if platform.system() != "Windows":
+        return False
+    loop = asyncio.get_event_loop()
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, _wmi_sync, host),
+            timeout=10.0,
+        )
     except Exception:
         return False
 
