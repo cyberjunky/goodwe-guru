@@ -95,9 +95,10 @@ def arp_has_mac(mac: str) -> bool:
 
 
 async def http_check(url: str) -> bool:
-    """True if the URL returns any HTTP response (device has a web interface)."""
+    """True if the URL returns any HTTP response (device has a web interface).
+    SSL verification disabled — self-signed certs (NAS, Proxmox, routers) are fine."""
     try:
-        async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=3.0, follow_redirects=True, verify=False) as client:
             r = await client.get(url)
             return r.status_code < 600
     except Exception:
