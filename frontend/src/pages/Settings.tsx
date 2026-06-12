@@ -383,12 +383,24 @@ function NotificationSettings() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Device power tracking panel
 // ─────────────────────────────────────────────────────────────────────────────
+type DetectionMethod = 'ping' | 'arp' | 'http' | 'wmi' | 'always_on' | 'none'
+
 interface DeviceEntry {
-  id: string; name: string; ip: string; mac: string
-  url: string; wmi_host: string
-  always_on: boolean; power_on: number; power_off: number
+  id: string; name: string
+  detection: DetectionMethod
+  ip: string; mac: string; url: string; wmi_host: string
+  power_on: number; power_off: number
   enabled: boolean; icon: string; on: boolean; current_w: number
 }
+
+const DETECTION_OPTS: { value: DetectionMethod; label: string; desc: string; field: string | null }[] = [
+  { value: 'ping',      label: 'Ping',      desc: 'ICMP ping to IP address',          field: 'IP address'   },
+  { value: 'arp',       label: 'ARP',       desc: 'Check ARP table for MAC address',  field: 'MAC address'  },
+  { value: 'http',      label: 'HTTP',      desc: 'GET request — any response = on',  field: 'URL'          },
+  { value: 'wmi',       label: 'WMI',       desc: 'Windows WMI query (Win host only)',field: 'WMI host'     },
+  { value: 'always_on', label: 'Always on', desc: 'Assume always on, no check',       field: null           },
+  { value: 'none',      label: 'None',      desc: 'Always off — track standby only',  field: null           },
+]
 
 const DEVICE_ICONS = ['🔌', '💡', '🖥️', '📺', '❄️', '🔥', '🎮', '🖨️', '📡', '🫙', '🚿', '🧊', '⚡', '🏠', '🎵', '🧺', '🍳', '💻']
 
@@ -417,7 +429,7 @@ function DeviceSettings() {
   }, [])
 
   function startNew() {
-    setEditing({ name: '', ip: '', mac: '', url: '', wmi_host: '', always_on: false, power_on: 0, power_off: 0, enabled: true, icon: '🔌' })
+    setEditing({ name: '', detection: 'ping', ip: '', mac: '', url: '', wmi_host: '', power_on: 0, power_off: 0, enabled: true, icon: '🔌' })
   }
 
   async function saveDevice() {
@@ -510,12 +522,13 @@ function DeviceSettings() {
                 )}
               </div>
               <div className="text-[10px] text-gray-600 mt-0.5">
-                {d.always_on ? 'Always on'
-                  : d.url      ? `http ${d.url}`
-                  : d.ip       ? `ping ${d.ip}`
-                  : d.mac      ? `arp ${d.mac}`
-                  : d.wmi_host ? `wmi ${d.wmi_host}`
-                  : 'no detection'}
+                {d.detection === 'always_on' ? 'Always on'
+                  : d.detection === 'none'     ? 'Standby only'
+                  : d.detection === 'ping'     ? `ping ${d.ip}`
+                  : d.detection === 'arp'      ? `arp ${d.mac}`
+                  : d.detection === 'http'     ? `http ${d.url}`
+                  : d.detection === 'wmi'      ? `wmi ${d.wmi_host}`
+                  : d.detection}
                 {' · '}on: {d.power_on} W · standby: {d.power_off} W
               </div>
             </div>
@@ -598,41 +611,36 @@ function DeviceSettings() {
             )}
 
             <div className="space-y-2">
-              <label className="text-xs text-gray-500 block">Detection</label>
-              <div className="flex items-center gap-3 py-1">
-                <span className="text-xs text-gray-400 w-20">Always on</span>
-                <button onClick={() => setEditing(e => ({ ...e!, always_on: !e!.always_on }))}
-                  className={`relative inline-flex w-10 h-5 rounded-full transition-colors ${editing.always_on ? 'bg-violet-500' : 'bg-gray-700'}`}>
-                  <span className={`inline-block w-3 h-3 bg-white rounded-full shadow transform transition-transform mt-1 ${editing.always_on ? 'translate-x-6' : 'translate-x-1'}`} />
-                </button>
+              <label className="text-xs text-gray-500 block">Detection method</label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {DETECTION_OPTS.map(opt => (
+                  <button key={opt.value}
+                    onClick={() => setEditing(e => ({ ...e!, detection: opt.value }))}
+                    className={`text-left px-2.5 py-2 rounded-lg border text-xs transition-colors ${editing.detection === opt.value ? 'border-violet-500 bg-violet-500/15 text-violet-300' : 'border-gray-700 bg-gray-800/60 text-gray-400 hover:border-gray-600'}`}>
+                    <div className="font-medium">{opt.label}</div>
+                    <div className="text-[9px] text-gray-500 leading-tight mt-0.5">{opt.desc}</div>
+                  </button>
+                ))}
               </div>
-              {!editing.always_on && (
-                <>
-                  <div>
-                    <label className="text-xs text-gray-500 block mb-1">IP address <span className="text-gray-600">(ping)</span></label>
-                    <input value={editing.ip ?? ''} onChange={e => setEditing(ev => ({ ...ev!, ip: e.target.value }))}
-                      placeholder="192.168.1.x"
-                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-500 block mb-1">MAC address <span className="text-gray-600">(ARP — fallback to IP)</span></label>
-                    <input value={editing.mac ?? ''} onChange={e => setEditing(ev => ({ ...ev!, mac: e.target.value }))}
-                      placeholder="aa:bb:cc:dd:ee:ff"
-                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-500 block mb-1">URL <span className="text-gray-600">(HTTP probe — any response = online)</span></label>
-                    <input value={editing.url ?? ''} onChange={e => setEditing(ev => ({ ...ev!, url: e.target.value }))}
-                      placeholder="http://192.168.1.x:8080"
-                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-500 block mb-1">WMI host <span className="text-gray-600">(Windows only — hostname or IP)</span></label>
-                    <input value={editing.wmi_host ?? ''} onChange={e => setEditing(ev => ({ ...ev!, wmi_host: e.target.value }))}
-                      placeholder="DESKTOP-PC or 192.168.1.x"
-                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
-                  </div>
-                </>
+              {editing.detection === 'ping' && (
+                <input value={editing.ip ?? ''} onChange={e => setEditing(ev => ({ ...ev!, ip: e.target.value }))}
+                  placeholder="IP address — 192.168.1.x"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
+              )}
+              {editing.detection === 'arp' && (
+                <input value={editing.mac ?? ''} onChange={e => setEditing(ev => ({ ...ev!, mac: e.target.value }))}
+                  placeholder="MAC address — aa:bb:cc:dd:ee:ff"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
+              )}
+              {editing.detection === 'http' && (
+                <input value={editing.url ?? ''} onChange={e => setEditing(ev => ({ ...ev!, url: e.target.value }))}
+                  placeholder="URL — http://192.168.1.x:8080"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
+              )}
+              {editing.detection === 'wmi' && (
+                <input value={editing.wmi_host ?? ''} onChange={e => setEditing(ev => ({ ...ev!, wmi_host: e.target.value }))}
+                  placeholder="WMI host — DESKTOP-PC or 192.168.1.x"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-violet-500" />
               )}
             </div>
 

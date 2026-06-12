@@ -22,17 +22,19 @@ DATA_DIR = Path(cfg.db_path).resolve().parent
 DEVICES_FILE = DATA_DIR / "devices.json"
 
 
+DETECTION_METHODS = ("ping", "arp", "http", "wmi", "always_on", "none")
+
 @dataclass
 class Device:
     id: str = ""
     name: str = "Device"
-    ip: str = ""           # ping this IP to detect on/off
-    mac: str = ""          # fallback: check ARP table for MAC
-    url: str = ""          # HTTP probe: GET → any response = online
-    wmi_host: str = ""     # Windows WMI host (Windows runner only)
-    always_on: bool = False
-    power_on: float = 0.0  # W when active
-    power_off: float = 0.0 # W standby
+    detection: str = "ping"  # one of DETECTION_METHODS
+    ip: str = ""             # used by: ping
+    mac: str = ""            # used by: arp
+    url: str = ""            # used by: http
+    wmi_host: str = ""       # used by: wmi
+    power_on: float = 0.0    # W when active
+    power_off: float = 0.0   # W standby
     enabled: bool = True
     icon: str = "🔌"
 
@@ -46,8 +48,14 @@ def load_devices() -> list[Device]:
         return []
     try:
         items = json.loads(DEVICES_FILE.read_text())
-        return [Device(**{k: v for k, v in item.items() if k in Device.__dataclass_fields__})
-                for item in items]
+        devices = []
+        for item in items:
+            d = Device(**{k: v for k, v in item.items() if k in Device.__dataclass_fields__})
+            # Migrate legacy always_on bool → detection field
+            if item.get("always_on") and d.detection == "ping":
+                d.detection = "always_on"
+            devices.append(d)
+        return devices
     except Exception as e:
         log.warning("devices.json load failed: %s", e)
         return []
@@ -118,17 +126,14 @@ async def wmi_check(host: str) -> bool:
 
 
 async def check_device(device: Device) -> bool:
-    if device.always_on:
-        return True
-    if device.url:
-        return await http_check(device.url)
-    if device.ip:
-        return await ping_host(device.ip)
-    if device.mac:
-        return arp_has_mac(device.mac)
-    if device.wmi_host:
-        return await wmi_check(device.wmi_host)
-    return True  # no detection method → assume on
+    m = device.detection
+    if m == "always_on":  return True
+    if m == "none":       return False
+    if m == "ping":       return await ping_host(device.ip) if device.ip else False
+    if m == "arp":        return arp_has_mac(device.mac)    if device.mac else False
+    if m == "http":       return await http_check(device.url) if device.url else False
+    if m == "wmi":        return await wmi_check(device.wmi_host) if device.wmi_host else False
+    return True
 
 
 async def poll_devices_loop() -> None:

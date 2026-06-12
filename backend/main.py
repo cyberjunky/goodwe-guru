@@ -869,7 +869,7 @@ async def get_devices(_: str = Depends(require_auth)):
     result = []
     for d in devs:
         item = asdict(d)
-        on = dev_engine.device_states.get(d.id, d.always_on)
+        on = dev_engine.device_states.get(d.id, d.detection == "always_on")
         item["on"] = on
         item["current_w"] = d.power_on if on else d.power_off
         result.append(item)
