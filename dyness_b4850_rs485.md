@@ -113,6 +113,8 @@ which UART pins the RS485 cape uses.
 
 ```bash
 # on the BeagleBone
+pyyhon3 -m venv .venv
+source .venv/bin/activate
 pip3 install pyserial
 
 # find the serial device for your RS485 cape

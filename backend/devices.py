@@ -194,7 +194,7 @@ def get_tracked_power() -> dict:
     for d in devs:
         if not d.enabled:
             continue
-        on = device_states.get(d.id, d.always_on)
+        on = device_states.get(d.id, d.detection == "always_on")
         w = d.power_on if on else d.power_off
         total += w
         items.append({"id": d.id, "name": d.name, "icon": d.icon, "on": on, "power_w": w})

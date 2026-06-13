@@ -46,6 +46,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -197,6 +198,76 @@ def parse_analog(address: int, info: bytes) -> PackData:
 # --------------------------------------------------------------------------- #
 # Serial I/O
 # --------------------------------------------------------------------------- #
+def mux_pad(reg: int, value: int = 0x0F) -> None:
+    """Set an AM335x pinmux control register via /dev/mem (root).
+
+    `value` 0x0F = mux mode 7 (GPIO), pull disabled, output. Used to put the
+    RS485 direction pad into GPIO mode without config-pin / a device-tree
+    overlay. The control module lives at 0x44E10000 (one 4K page covers all
+    pad-config registers, which start at offset 0x800).
+    """
+    import mmap
+    import struct
+    off = reg - 0x44E10000
+    try:
+        fd = os.open("/dev/mem", os.O_RDWR | os.O_SYNC)
+        m = mmap.mmap(fd, 0x1000, offset=0x44E10000)
+        os.close(fd)
+        cur = struct.unpack("<I", m[off:off + 4])[0]
+        if (cur & 0x7) == 0x7:
+            print(f"pad {reg:#010x} already GPIO ({cur:#04x}); no mux needed")
+        else:
+            m[off:off + 4] = struct.pack("<I", value)
+            got = struct.unpack("<I", m[off:off + 4])[0]
+            print(f"muxed pad {reg:#010x}: {cur:#04x} -> {got:#04x}"
+                  + ("" if (got & 0x7) == 0x7 else "  (write rejected — kernel owns the pin)"))
+        m.close()
+    except OSError as exc:
+        print(f"warning: could not mux pad {reg:#010x} ({exc}); "
+              "if direction doesn't work, mux it manually", file=sys.stderr)
+
+
+class Dir485:
+    """Drive the RS485 transceiver direction line via a sysfs GPIO.
+
+    The Waveshare RS485/CAN cape ties RE+DE (the RSE net) to P9_42 = gpio7
+    through a 0Ω resistor — there is no jumper for it. High = transmit,
+    low = receive. We raise it before sending and, once the bytes have fully
+    shifted out, drop it to listen for the reply (half-duplex).
+
+    `mux_reg` (optional) is the AM335x pad-config register for the pin; when
+    given it's set to GPIO mode first, so no config-pin / overlay is needed.
+    For the Waveshare cape that's P9_42 = 0x44E10964.
+    """
+
+    def __init__(self, num: int, mux_reg: int | None = None):
+        self.num = num
+        if mux_reg is not None:
+            mux_pad(mux_reg)
+        base = f"/sys/class/gpio/gpio{num}"
+        if not os.path.isdir(base):
+            try:
+                with open("/sys/class/gpio/export", "w") as f:
+                    f.write(str(num))
+            except OSError as exc:
+                sys.exit(f"cannot export gpio{num} for RS485 direction: {exc}\n"
+                         "  run as root, and mux the pin first: "
+                         "sudo config-pin P9_42 gpio")
+        with open(f"{base}/direction", "w") as f:
+            f.write("low")  # default to receive
+        self._val = open(f"{base}/value", "w", buffering=1)
+
+    def tx(self) -> None:
+        self._val.write("1"); self._val.flush()
+
+    def rx(self) -> None:
+        self._val.write("0"); self._val.flush()
+
+
+# Set by main() when --de-gpio is given; transact() toggles it around each TX.
+_DE: Dir485 | None = None
+
+
 def open_port(args) -> serial.Serial:
     ser = serial.Serial(
         port=args.port,
@@ -220,8 +291,13 @@ def transact(ser: serial.Serial, frame: bytes, debug: bool) -> bytes:
     ser.reset_input_buffer()
     if debug:
         print(f"  TX: {frame.decode('ascii').strip()}")
+    if _DE:
+        _DE.tx()
     ser.write(frame)
-    ser.flush()
+    ser.flush()  # tcdrain: blocks until all bytes have left the UART
+    if _DE:
+        time.sleep(0.002)  # let the final stop bit clear before switching to RX
+        _DE.rx()
     # read until EOI or timeout
     buf = bytearray()
     deadline = time.monotonic() + ser.timeout + 0.5
@@ -373,6 +449,10 @@ def main() -> None:
     ap.add_argument("--scan", action="store_true", help="probe addresses 0..15")
     ap.add_argument("--rs485-rts", action="store_true",
                     help="enable RTS direction toggling for the transceiver")
+    ap.add_argument("--de-gpio", type=int, default=None,
+                    help="GPIO number driving the RS485 direction line (DE/RE). "
+                         "Waveshare RS485/CAN cape = 7 (P9_42). Required for that "
+                         "cape — without it the MAX485 can't switch TX/RX")
     ap.add_argument("--gg-url", default=None,
                     help="GoodWe Guru base URL, e.g. http://192.168.2.50 — "
                          "stream packs live to its /ws/bms (best with --loop)")
@@ -386,6 +466,11 @@ def main() -> None:
         if not args.gg_password:
             sys.exit("--gg-url needs --gg-password")
         bridge = GuruBridge(args.gg_url, args.gg_password)
+
+    if args.de_gpio is not None:
+        global _DE
+        _DE = Dir485(args.de_gpio)
+        print(f"RS485 direction via gpio{args.de_gpio} (high=TX, low=RX)")
 
     ser = open_port(args)
     print(f"Opened {args.port} @ {args.baud} baud\n")
