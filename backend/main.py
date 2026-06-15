@@ -547,7 +547,7 @@ async def forecast_accuracy(_: str = Depends(require_auth)):
         f, a = r.get("forecast_kwh"), r.get("actual_kwh")
         err = round((a - f) / f * 100, 1) if (f and a is not None) else None
         out.append({**r, "error_pct": err})
-    # Overall bias across days with both values (>0 forecast over-predicts)
+    # Overall bias: (actual-forecast)/forecast — >0 means actual exceeded forecast (forecast ran low)
     errs = [o["error_pct"] for o in out if o["error_pct"] is not None]
     bias = round(sum(errs) / len(errs), 1) if errs else None
     return {"days": out, "bias_pct": bias}

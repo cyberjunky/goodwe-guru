@@ -327,8 +327,8 @@ export default function Forecast() {
               {Math.abs(accuracy.bias_pct) < 10
                 ? ' — well calibrated 👍'
                 : accuracy.bias_pct > 0
-                  ? ' — forecast runs high; try lowering kWp / check tilt & azimuth.'
-                  : ' — forecast runs low; try raising kWp.'}
+                  ? ' — forecast runs low; try raising kWp.'
+                  : ' — forecast runs high; try lowering kWp / check tilt & azimuth.'}
             </p>
           )}
           <div className="space-y-1">
@@ -346,7 +346,7 @@ export default function Forecast() {
               </div>
             ))}
           </div>
-          <p className="text-[10px] text-gray-600 mt-2">Builds up daily; +error = forecast over-predicted. Tune kWp/tilt/azimuth to shrink the bias.</p>
+          <p className="text-[10px] text-gray-600 mt-2">+error = actual exceeded forecast (forecast ran low). Tune kWp/tilt/azimuth to shrink the bias.</p>
         </div>
       )}
 
