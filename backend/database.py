@@ -221,8 +221,23 @@ class Database:
     def record_actual(self, date: str, actual_kwh: float):
         self.con.execute(
             "INSERT INTO forecast_log(date, actual_kwh) VALUES(?,?) "
-            "ON CONFLICT(date) DO UPDATE SET actual_kwh=excluded.actual_kwh",
+            "ON CONFLICT(date) DO UPDATE SET actual_kwh=MAX(actual_kwh, excluded.actual_kwh)",
             (date, round(float(actual_kwh), 2)))
+        self.con.commit()
+
+    def repair_forecast_actuals(self):
+        """Backfill forecast_log.actual_kwh from daily_summary.e_day (MAX wins)."""
+        self.con.execute("""
+            UPDATE forecast_log
+            SET actual_kwh = (
+                SELECT e_day FROM daily_summary WHERE daily_summary.date = forecast_log.date
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM daily_summary
+                WHERE daily_summary.date = forecast_log.date
+                  AND daily_summary.e_day > COALESCE(forecast_log.actual_kwh, 0)
+            )
+        """)
         self.con.commit()
 
     def get_forecast_accuracy(self, n: int = 14) -> list[dict]:

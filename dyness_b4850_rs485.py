@@ -349,6 +349,9 @@ def print_pack(pd: PackData) -> None:
     print(f"  raw payload: {pd.raw_hex}")
 
 
+COMMON_BAUDS = [9600, 19200, 38400, 57600, 115200]
+
+
 def scan(ser: serial.Serial, debug: bool) -> None:
     print("Scanning addresses 0x00..0x0F for responding packs...")
     found = []
@@ -363,6 +366,95 @@ def scan(ser: serial.Serial, debug: bool) -> None:
                 print(f"  addr {addr}: data received but failed to parse")
         time.sleep(0.1)
     print(f"\nResponding addresses: {found or 'none — check wiring/baud/A-B polarity'}")
+
+
+def _hex_dump(buf: bytearray) -> None:
+    for off in range(0, len(buf), 16):
+        row = buf[off:off+16]
+        hex_part = " ".join(f"{b:02x}" for b in row).ljust(47)
+        asc_part = "".join(chr(b) if 0x20 <= b < 0x7f else "." for b in row)
+        print(f"    {off:04x}  {hex_part}  {asc_part}")
+
+
+def listen_dump(port: str, baud: int, duration: float = 10.0) -> None:
+    """Open port and passively capture everything for `duration` seconds (no TX)."""
+    import argparse as _ap
+    print(f"Passive listen on {port} @ {baud} baud for {duration}s (no TX)...")
+    args = _ap.Namespace(port=port, baud=baud, timeout=0.2, rs485_rts=False)
+    ser = open_port(args)
+    buf = bytearray()
+    deadline = time.monotonic() + duration
+    while time.monotonic() < deadline:
+        chunk = ser.read(256)
+        if chunk:
+            buf.extend(chunk)
+    ser.close()
+    if not buf:
+        print("  nothing received — battery may not broadcast unsolicited data")
+        return
+    print(f"  captured {len(buf)} bytes:")
+    _hex_dump(buf)
+
+
+def raw_dump(port: str, baud: int, timeout: float, duration: float = 5.0) -> None:
+    """Send a request to addr 0 and dump everything received as hex + ASCII."""
+    import argparse as _ap
+    print(f"Raw dump on {port} @ {baud} baud — sending to addr 0, listening {duration}s")
+    args = _ap.Namespace(port=port, baud=baud, timeout=timeout, rs485_rts=False)
+    ser = open_port(args)
+    frame = build_frame(0, CID2_ANALOG, "00")
+    print(f"  TX: {frame.decode('ascii').strip()}")
+    ser.reset_input_buffer()
+    ser.write(frame)
+    ser.flush()
+    buf = bytearray()
+    deadline = time.monotonic() + duration
+    while time.monotonic() < deadline:
+        chunk = ser.read(256)
+        if chunk:
+            buf.extend(chunk)
+    ser.close()
+    if not buf:
+        print("  nothing received")
+        return
+    print(f"  RX ({len(buf)} bytes):")
+    _hex_dump(buf)
+
+
+def baud_scan(port: str, timeout: float) -> None:
+    """Try each common baud rate and report which ones get any response."""
+    import argparse as _ap
+    print(f"Baud-rate scan on {port}  (addresses 0x00..0x0F, {timeout}s timeout each)")
+    for baud in COMMON_BAUDS:
+        print(f"\n── {baud} baud ──")
+        args = _ap.Namespace(port=port, baud=baud, timeout=timeout,
+                             rs485_rts=False)
+        ser = open_port(args)
+        found = []
+        any_rx = []
+        for addr in range(0, 16):
+            raw = transact(ser, build_frame(addr, CID2_ANALOG, f"{addr:02X}"), False)
+            if raw:
+                if raw[0] == SOI:
+                    try:
+                        rtn, _ = parse_frame(raw)
+                        print(f"  addr {addr}: VALID RESPONSE  RTN=0x{rtn:02X} ← baud {baud} works!")
+                        found.append(addr)
+                    except ValueError as e:
+                        print(f"  addr {addr}: rx {len(raw)}B  parse error: {e}")
+                        any_rx.append(addr)
+                else:
+                    print(f"  addr {addr}: rx {len(raw)}B  raw={raw[:16].hex()}")
+                    any_rx.append(addr)
+            time.sleep(0.05)
+        ser.close()
+        if found:
+            print(f"  ✓ baud {baud} — addresses: {found}")
+        elif any_rx:
+            print(f"  ~ baud {baud} — got bytes at addrs {any_rx} but no valid frame")
+        else:
+            print(f"  ✗ baud {baud} — no response")
+    print("\nDone.")
 
 
 # --------------------------------------------------------------------------- #
@@ -447,6 +539,12 @@ def main() -> None:
     ap.add_argument("--loop", type=float, default=0,
                     help="poll forever every N seconds (0 = read once)")
     ap.add_argument("--scan", action="store_true", help="probe addresses 0..15")
+    ap.add_argument("--raw", action="store_true",
+                    help="send one frame to addr 0 then hex-dump everything received (5s window)")
+    ap.add_argument("--listen", action="store_true",
+                    help="passively capture all bus traffic for 10s without sending anything")
+    ap.add_argument("--baud-scan", action="store_true",
+                    help=f"try all common bauds {COMMON_BAUDS} and report which gets a response")
     ap.add_argument("--rs485-rts", action="store_true",
                     help="enable RTS direction toggling for the transceiver")
     ap.add_argument("--de-gpio", type=int, default=None,
@@ -471,6 +569,18 @@ def main() -> None:
         global _DE
         _DE = Dir485(args.de_gpio)
         print(f"RS485 direction via gpio{args.de_gpio} (high=TX, low=RX)")
+
+    if args.listen:
+        listen_dump(args.port, args.baud)
+        return
+
+    if args.raw:
+        raw_dump(args.port, args.baud, args.timeout)
+        return
+
+    if args.baud_scan:
+        baud_scan(args.port, args.timeout)
+        return
 
     ser = open_port(args)
     print(f"Opened {args.port} @ {args.baud} baud\n")

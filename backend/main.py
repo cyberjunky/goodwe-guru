@@ -261,6 +261,7 @@ async def lifespan(_app: FastAPI):
         get_inverter=lambda: inverter,
         db=db,
     ))
+    db.repair_forecast_actuals()
     asyncio.create_task(forecast_logger())
     asyncio.create_task(battery_forecast_scheduler())
     asyncio.create_task(dev_engine.poll_devices_loop())

@@ -220,6 +220,11 @@ apt-get install -y -qq \
 
 ok "Base packages installed"
 
+# Allow ping (ICMP) for device detection — survives via the systemd
+# AmbientCapabilities below; setcap here covers direct/dev runs outside systemd.
+PING_BIN=$(command -v ping 2>/dev/null || true)
+[[ -n "$PING_BIN" ]] && setcap cap_net_raw+ep "$PING_BIN" && ok "cap_net_raw granted to ping"
+
 # ── Node.js ───────────────────────────────────────────────────────────────────
 if ! command -v node &>/dev/null || [[ "$(node --version | cut -d. -f1 | tr -d v)" -lt "$NODE_MAJOR" ]]; then
   info "Installing Node.js $NODE_MAJOR …"
@@ -335,9 +340,9 @@ SystemCallArchitectures=native
 ReadWritePaths=${DATA_DIR}
 ReadOnlyPaths=${APP_DIR}
 
-# Capabilities (none needed — binding to 8000, not privileged port)
-CapabilityBoundingSet=
-AmbientCapabilities=
+# CAP_NET_RAW: needed for ping (ICMP) used by device detection
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
 
 StandardOutput=journal
 StandardError=journal

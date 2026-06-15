@@ -105,6 +105,10 @@ fi
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 
+# Re-apply ping capability in case apt upgraded iputils-ping and stripped it
+PING_BIN=$(command -v ping 2>/dev/null || true)
+[[ -n "$PING_BIN" ]] && setcap cap_net_raw+ep "$PING_BIN" 2>/dev/null && ok "cap_net_raw re-applied to ping" || true
+
 info "Restarting $SERVICE_NAME …"
 systemctl restart "$SERVICE_NAME"
 sleep 2
