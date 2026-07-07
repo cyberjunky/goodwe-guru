@@ -430,13 +430,15 @@ TEMPLATES = [
             {"sensor": "battery_soc", "op": "lt", "value": 85, "value2": 0},
         ],
         "actions":     [
-            {"type": "eco_charge", "setting": "", "value": None, "message": ""},
+            {"type": "eco_charge", "setting": "", "value": None, "soc": 85, "message": ""},
             {"type": "notify", "setting": "", "value": None,
              "message": "🔋 Pre-evening charge boost started — battery below target before evening"},
         ],
         "cooldown":    120,
         "params":      [
             {"key": "conditions.0.value", "label": "Target SoC before evening (%)",
+             "type": "number", "min": 50, "max": 100, "default": 85},
+            {"key": "actions.0.soc", "label": "Charge to SoC (%)",
              "type": "number", "min": 50, "max": 100, "default": 85},
         ],
     },
