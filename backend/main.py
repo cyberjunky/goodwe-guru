@@ -154,7 +154,8 @@ async def poll_inverter():
         await broadcast({"type": "data", "payload": latest_data})
         try:
             db.insert_snapshot(latest_data)
-            asyncio.create_task(check_and_notify(latest_data, db.get_today_summary()))
+            asyncio.create_task(check_and_notify(latest_data, db.get_today_summary(),
+                                                 get_flow=lambda: db.get_energy_flow(None)))
         except Exception as db_err:
             log.warning("DB write skipped: %s\n%s", db_err, traceback.format_exc())
 

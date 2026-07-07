@@ -55,6 +55,17 @@ def _data() -> dict:
     return (_get_data() if _get_data else {}) or {}
 
 
+def _day_flows(date: str | None = None) -> tuple[dict, dict]:
+    """Snapshot-derived (sources, destinations) energies for one day.
+    ES daily counters (load, battery charge/discharge, import/export) read 0,
+    so the raw inverter fields can't be used for these."""
+    try:
+        f = _db.get_energy_flow(date)
+        return f.get("sources", {}) or {}, f.get("destinations", {}) or {}
+    except Exception:
+        return {}, {}
+
+
 # ── Telegram API ──────────────────────────────────────────────────────────────
 async def _api(token: str, method: str, **payload) -> dict:
     url = f"https://api.telegram.org/bot{token}/{method}"
@@ -157,14 +168,15 @@ def _status_kb() -> list:
 
 def _battery_text() -> str:
     d = _data()
+    s, dst = _day_flows()
     return (
         f"<b>🔋 Battery</b>\n"
         f"SoC: <b>{d.get('battery_soc', '?')}%</b>  ·  SoH: {d.get('battery_soh', '?')}%\n"
         f"Power: {_fmt_w(d.get('pbattery1'))} ({d.get('battery_mode_label', '?')})\n"
         f"Voltage: {float(d.get('vbattery1', 0) or 0):.1f} V\n"
         f"Temp: {float(d.get('battery_temperature', 0) or 0):.1f} °C\n"
-        f"Charged today: {float(d.get('e_bat_charge_day', 0) or 0):.2f} kWh  ·  "
-        f"Discharged: {float(d.get('e_bat_discharge_day', 0) or 0):.2f} kWh"
+        f"Charged today: {float(dst.get('battery', 0) or 0):.2f} kWh  ·  "
+        f"Discharged: {float(s.get('battery', 0) or 0):.2f} kWh"
     )
 
 
@@ -191,12 +203,15 @@ def _grid_text() -> str:
 
 def _today_text() -> str:
     d = _data()
+    s, dst = _day_flows()
     return (
         f"<b>📅 Today</b>\n"
         f"☀️ Solar: {float(d.get('e_day', 0) or 0):.2f} kWh\n"
-        f"🏠 Load: {float(d.get('e_load_day', 0) or 0):.2f} kWh\n"
-        f"🔋 Charged: {float(d.get('e_bat_charge_day', 0) or 0):.2f} / "
-        f"Discharged: {float(d.get('e_bat_discharge_day', 0) or 0):.2f} kWh"
+        f"🏠 Load: {float(dst.get('load', 0) or 0):.2f} kWh\n"
+        f"🔌 Grid: ↓ {float(s.get('grid', 0) or 0):.2f} import · "
+        f"↑ {float(dst.get('grid', 0) or 0):.2f} export kWh\n"
+        f"🔋 Charged: {float(dst.get('battery', 0) or 0):.2f} / "
+        f"Discharged: {float(s.get('battery', 0) or 0):.2f} kWh"
     )
 
 
@@ -209,7 +224,12 @@ def _history_text() -> str:
         return "No history yet."
     out = ["<b>📅 Last 7 days</b>", "<code>date        solar  load</code>"]
     for r in rows:
-        out.append(f"<code>{str(r.get('ts',''))[:10]}  {float(r.get('e_day',0) or 0):5.1f}  {float(r.get('e_load_day',0) or 0):5.1f}</code>")
+        date = str(r.get("ts", ""))[:10]
+        load = float(r.get("e_load_day", 0) or 0)
+        if load <= 0:   # ES load counter reads 0 — derive from snapshots (kept 7 days)
+            _, dst = _day_flows(date)
+            load = float(dst.get("load", 0) or 0)
+        out.append(f"<code>{date}  {float(r.get('e_day',0) or 0):5.1f}  {load:5.1f}</code>")
     return "\n".join(out)
 
 
@@ -307,7 +327,13 @@ def _chart_energy() -> bytes | None:
         return None
     labels = [str(r.get("ts", ""))[5:10] for r in rows]
     solar  = [float(r.get("e_day", 0) or 0) for r in rows]
-    load   = [float(r.get("e_load_day", 0) or 0) for r in rows]
+    load   = []
+    for r in rows:
+        v = float(r.get("e_load_day", 0) or 0)
+        if v <= 0:   # ES load counter reads 0 — derive from snapshots
+            _, dst = _day_flows(str(r.get("ts", ""))[:10])
+            v = float(dst.get("load", 0) or 0)
+        load.append(v)
     x = range(len(rows))
     fig, ax = plt.subplots(figsize=(8, 3.5), dpi=110)
     fig.patch.set_facecolor("#0a0f1e"); ax.set_facecolor("#0a0f1e")

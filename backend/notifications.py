@@ -137,10 +137,14 @@ class NotificationState:
 _state = NotificationState()
 
 
-async def check_and_notify(data: dict[str, Any], daily_stats: dict[str, Any] | None = None):
+async def check_and_notify(data: dict[str, Any], daily_stats: dict[str, Any] | None = None,
+                           get_flow: Any = None):
     """
     Call once per poll tick with the latest inverter data.
     daily_stats: today's summary from the database (for daily summary message).
+    get_flow: optional callable returning db.get_energy_flow(None) — used to
+    derive load/import/export/battery energies, since the ES daily counters
+    for those read 0. Called lazily, only when the daily summary is sent.
     """
     nc = load_notification_config()
     if not nc.enabled or not nc.bot_token or not nc.chat_id:
@@ -247,6 +251,19 @@ async def check_and_notify(data: dict[str, Any], daily_stats: dict[str, Any] | N
             e_load    = float(daily_stats.get("e_load_day",0))
             e_bch     = float(daily_stats.get("e_bat_charge_day",   0))
             e_bdis    = float(daily_stats.get("e_bat_discharge_day",0))
+
+            # ES daily counters for these read 0 — prefer snapshot-derived flows.
+            if get_flow is not None:
+                try:
+                    f = get_flow()
+                    s, dst = f.get("sources", {}) or {}, f.get("destinations", {}) or {}
+                    e_imp  = float(s.get("grid", 0))      or e_imp
+                    e_exp  = float(dst.get("grid", 0))    or e_exp
+                    e_load = float(dst.get("load", 0))    or e_load
+                    e_bch  = float(dst.get("battery", 0)) or e_bch
+                    e_bdis = float(s.get("battery", 0))   or e_bdis
+                except Exception as flow_err:
+                    log.warning("daily summary: flow derivation failed: %s", flow_err)
 
             # Financial snapshot if tariffs configured
             try:
