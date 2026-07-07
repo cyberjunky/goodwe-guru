@@ -231,23 +231,20 @@ async def execute(action: dict, inverter: Any) -> str:
             return await apply_setting(inverter, "work_mode", 0)
 
     elif atype == "eco_charge":
-        # Switch to Eco mode with an all-day charge schedule, capped at a target SoC.
+        # Use ECO_CHARGE convenience mode — sets ECO mode + an all-day charge schedule
+        # capped at the target SoC in one call. The old write_setting("eco_mode_1", str)
+        # approach was silently rejected by EcoModeV2 (requires raw bytes), leaving the
+        # inverter in ECO mode without a schedule and charging to 100%.
         if inverter:
+            from goodwe import OperationMode
             soc = max(10, min(int(action.get("soc", 90)), 100))
-            await apply_setting(inverter, "work_mode", 3)
-            try:
-                await inverter.write_setting("eco_mode_1", f"00:00-23:59-100-{soc}-1")
-            except Exception:
-                pass
+            await inverter.set_operation_mode(OperationMode.ECO_CHARGE, eco_mode_power=100, eco_mode_soc=soc)
             return f"ECO charge to {soc}%"
 
     elif atype == "eco_discharge":
         if inverter:
-            await apply_setting(inverter, "work_mode", 3)
-            try:
-                await inverter.write_setting("eco_mode_1", "00:00-23:59-100-0-0")
-            except Exception:
-                pass
+            from goodwe import OperationMode
+            await inverter.set_operation_mode(OperationMode.ECO_DISCHARGE, eco_mode_power=100)
             return "ECO discharge mode (all day)"
 
     elif atype == "notify":
