@@ -96,11 +96,28 @@ async def ping_host(ip: str) -> bool:
 
 
 def arp_has_mac(mac: str) -> bool:
+    """True if the MAC is in the ARP table with a COMPLETE entry (flags != 0x0).
+    Incomplete/stale entries show 00:00:00:00:00:00 or linger after expiry."""
     norm = mac.lower().replace("-", ":").strip()
     try:
-        return norm in Path("/proc/net/arp").read_text().lower()
+        for line in Path("/proc/net/arp").read_text().splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 4 and parts[3].lower() == norm and parts[2] != "0x0":
+                return True
     except Exception:
-        return False
+        pass
+    return False
+
+
+async def arp_check(device: "Device") -> bool:
+    """ARP presence check. Kernel ARP entries expire ~30 s after the last
+    traffic, so a silent-but-on device drops out of the table. If an IP is
+    configured, ping it first: the ICMP reply may be firewalled (Windows
+    default) but the ARP resolution it triggers is answered by the NIC
+    regardless — refreshing the entry. Off devices answer neither."""
+    if device.ip:
+        await ping_host(device.ip)   # outcome irrelevant; refreshes neighbor table
+    return arp_has_mac(device.mac)
 
 
 async def tcp_check(host: str, port: int) -> bool:
@@ -163,7 +180,7 @@ async def check_device(device: Device) -> bool:
     if m == "none":       return False
     if m == "ping":       return await ping_host(device.ip) if device.ip else False
     if m == "tcp":        return await tcp_check(device.ip, device.tcp_port) if device.ip else False
-    if m == "arp":        return arp_has_mac(device.mac)    if device.mac else False
+    if m == "arp":        return await arp_check(device)    if device.mac else False
     if m == "http":       return await http_check(device.url) if device.url else False
     if m == "wmi":        return await wmi_check(device.wmi_host) if device.wmi_host else False
     return True
