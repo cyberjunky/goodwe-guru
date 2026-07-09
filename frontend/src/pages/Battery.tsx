@@ -9,7 +9,7 @@ function DischargeControl() {
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
   const [dod, setDod] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
-  const [sched, setSched] = useState<{ enabled: boolean; threshold_kwh: number; hour_forecast_kwh?: number; producing?: boolean } | null>(null)
+  const [sched, setSched] = useState<{ enabled: boolean; threshold_kwh: number; max_soc?: number; hour_forecast_kwh?: number; producing?: boolean } | null>(null)
 
   async function refresh() {
     try {
@@ -33,6 +33,14 @@ function DischargeControl() {
     if (isNaN(v)) return
     setSched(s => s ? { ...s, threshold_kwh: v } : s)
     try { await fetch('/api/battery-schedule', { method: 'POST', headers, body: JSON.stringify({ threshold_kwh: v }) }) }
+    catch { /* ignore */ }
+    refresh()
+  }
+  async function setMaxSoc(v: number) {
+    if (isNaN(v)) return
+    v = Math.max(50, Math.min(Math.round(v), 100))
+    setSched(s => s ? { ...s, max_soc: v } : s)
+    try { await fetch('/api/battery-schedule', { method: 'POST', headers, body: JSON.stringify({ max_soc: v }) }) }
     catch { /* ignore */ }
     refresh()
   }
@@ -100,6 +108,16 @@ function DischargeControl() {
               <b style={{ color: sched.producing ? '#34d399' : '#fb923c' }}>{sched.producing ? 'Hold' : 'Discharge'}</b>
             </span>
           )}
+        </div>
+        <div className="flex items-center gap-2 text-xs text-gray-400">
+          <span>Charge cap</span>
+          <input type="number" step="1" min="50" max="100" defaultValue={sched?.max_soc ?? 80}
+            onBlur={e => setMaxSoc(parseFloat(e.target.value))}
+            className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-right text-white" />
+          <span>% SoC</span>
+          <span className="ml-auto text-gray-500">
+            stops charging here (100 = no cap) — protects battery life
+          </span>
         </div>
       </div>
     </div>

@@ -227,7 +227,9 @@ async def _apply_dod_verified(target: int, tries: int = 3) -> bool:
 async def battery_forecast_scheduler():
     from battery_schedule import load_schedule
     from forecast import current_hour_kwh
+    from inverter_io import apply_setting
     last_dod = None
+    last_cap_state = None   # 'capped' (ECO hold at max_soc) | 'normal' (General)
     await asyncio.sleep(60)
     while True:
         try:
@@ -251,8 +253,25 @@ async def battery_forecast_scheduler():
                         last_dod = desired if ok else None   # not confirmed → retry next cycle
                         log.info("Battery forecast schedule: hour=%.2f kWh live=%.2f kW producing=%s DoD→%d (%s)",
                                  kwh, live_kw, producing, desired, "ok" if ok else "unconfirmed, retrying")
+
+                    # Charge cap: General mode has no max-SoC on ES, so once the
+                    # battery hits the cap while the sun is out, hold it there in
+                    # ECO_CHARGE(max_soc) (charging stops at target, no discharge).
+                    # Evening → back to General so the battery can power the house.
+                    cap = int(getattr(sch, "max_soc", 100) or 100)
+                    if 0 < cap < 100:
+                        soc = float(latest_data.get("battery_soc") or 0)
+                        if producing and soc >= cap and last_cap_state != "capped":
+                            await apply_setting(inverter, "eco_charge", cap)
+                            last_cap_state = "capped"
+                            log.info("Battery charge cap: SoC %.0f%% ≥ %d%% — ECO hold at cap", soc, cap)
+                        elif not producing and last_cap_state != "normal":
+                            await apply_setting(inverter, "work_mode", 0)
+                            last_cap_state = "normal"
+                            log.info("Battery charge cap: evening — back to General mode")
             else:
                 last_dod = None
+                last_cap_state = None
         except Exception as e:
             log.warning("battery_forecast_scheduler: %s", e)
         await asyncio.sleep(300)   # check every 5 min; writes only on transition

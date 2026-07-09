@@ -41,6 +41,18 @@ async def apply_setting(inverter, key: str, value) -> str:
         await inverter.set_operation_mode(mode)
         return f"operation mode → {mode.name}"
 
+    if key == "eco_charge":
+        # Eco mode, all-day charge schedule capped at a target SoC. Charging
+        # (grid or solar) stops at the target; the battery is not discharged.
+        soc = max(10, min(int(value), 100))
+        await inverter.set_operation_mode(OperationMode.ECO_CHARGE,
+                                          eco_mode_power=100, eco_mode_soc=soc)
+        return f"ECO charge → target {soc}%"
+
+    if key == "eco_discharge":
+        await inverter.set_operation_mode(OperationMode.ECO_DISCHARGE, eco_mode_power=100)
+        return "ECO discharge (all day)"
+
     if key == "dod":
         await inverter.set_ongrid_battery_dod(int(value))
         return f"on-grid DoD → {int(value)}%"

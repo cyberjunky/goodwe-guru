@@ -39,6 +39,14 @@ battery while the current hour's solar forecast ≥ a threshold, discharges belo
 — ~2 writes/day, flash-safe. (Inverter NVM has limited write endurance: never write
 settings on a tight loop.)
 
+**There is no native charge-SoC cap on ES** — General mode charges the battery to
+100% with excess solar. The scheduler enforces `max_soc` (default 80, 100 = off):
+when producing and SoC ≥ cap it switches to `ECO_CHARGE(max_soc)` (charging stops
+at the target, no discharge), and back to General when production ends. The
+"producing" check uses live PV (`ppv`) alongside the forecast so a wrong/missing
+forecast can't flip settings, and a failed forecast fetch is never cached (a
+poisoned empty cache once released the hold at midday).
+
 ## Stack
 
 ```

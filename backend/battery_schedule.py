@@ -30,6 +30,10 @@ class BatterySchedule:
     threshold_kwh: float = 0.1   # hold while this hour's solar forecast ≥ this (kWh)
     day_dod:       int   = 0     # DoD while producing (0 = hold, no discharge)
     night_dod:     int   = 80    # DoD when below threshold (normal discharge to 20%)
+    max_soc:       int   = 80    # charge cap (%): stop charging here (100 = no cap).
+                                 # General mode has no native cap on ES; the scheduler
+                                 # enforces it by switching to ECO_CHARGE(max_soc) when
+                                 # SoC reaches the cap, back to General in the evening.
 
 
 def load_schedule() -> BatterySchedule:
