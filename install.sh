@@ -220,18 +220,13 @@ apt-get install -y -qq \
 
 ok "Base packages installed"
 
-# Device ping detection gets CAP_NET_RAW from the systemd unit's
-# AmbientCapabilities (below) — NOT from setcap on the ping binary itself.
-# The service runs with NoNewPrivileges=yes, under which execing a binary
-# that carries its OWN file capability (as setcap would give it) triggers a
-# kernel "secure exec" transition that clears the parent's ambient set on
-# the child — so a setcap'd ping silently loses cap_net_raw the moment
-# uvicorn spawns it, while still working fine from an interactive root/sudo
-# shell (which has no NoNewPrivileges). Make sure ping has no lingering file
-# capability from a previous install/update, so ambient inheritance applies.
+# Device ping detection needs a raw ICMP socket. AmbientCapabilities alone
+# (the "correct" systemd way) proved unreliable in practice, so the service
+# unit runs with NoNewPrivileges=no + a setcap'd ping binary instead — the
+# same mechanism a normal root/user shell uses, which is what's confirmed
+# to actually work.
 PING_BIN=$(command -v ping 2>/dev/null || true)
-[[ -n "$PING_BIN" ]] && setcap -r "$PING_BIN" 2>/dev/null
-ok "ping relies on systemd AmbientCapabilities (no file capability set)"
+[[ -n "$PING_BIN" ]] && setcap cap_net_raw+ep "$PING_BIN" && ok "cap_net_raw granted to ping"
 
 # ── Node.js ───────────────────────────────────────────────────────────────────
 if ! command -v node &>/dev/null || [[ "$(node --version | cut -d. -f1 | tr -d v)" -lt "$NODE_MAJOR" ]]; then
@@ -329,7 +324,7 @@ RestartSec=10
 TimeoutStopSec=30
 
 # ── Systemd sandboxing ───────────────────────────────────────────
-NoNewPrivileges=yes
+# (NoNewPrivileges is set further down, alongside the ping capability note)
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=strict
@@ -348,7 +343,13 @@ SystemCallArchitectures=native
 ReadWritePaths=${DATA_DIR}
 ReadOnlyPaths=${APP_DIR}
 
-# CAP_NET_RAW: needed for ping (ICMP) used by device detection
+# CAP_NET_RAW: needed for ping (ICMP) used by device detection.
+# NoNewPrivileges is intentionally OFF: with it on, a setcap'd ping binary
+# loses its capability the moment this service execs it (secure-exec clears
+# the parent's ambient set), so ping silently fails while working fine from
+# an interactive shell. Off, ping's own file capability just works, same as
+# for any normal user.
+NoNewPrivileges=no
 CapabilityBoundingSet=CAP_NET_RAW
 AmbientCapabilities=CAP_NET_RAW
 

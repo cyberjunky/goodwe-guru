@@ -105,13 +105,21 @@ fi
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 
-# Ping detection relies on the systemd unit's AmbientCapabilities, not a
-# file capability on the binary — the two conflict under NoNewPrivileges=yes
-# (execing a capability-carrying binary clears the parent's ambient set on
-# the child). Strip any file capability apt may have (re-)added so ambient
-# inheritance keeps working. See install.sh for the full explanation.
+# Ping (device detection) needs a raw ICMP socket. AmbientCapabilities alone
+# proved unreliable on this host, so the service unit now runs with
+# NoNewPrivileges=no + a setcap'd ping binary — same mechanism as a normal
+# root/user shell, which is what we confirmed actually works. Ensure both
+# halves are in place on every update, so this can't silently regress again.
+DROPIN_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
+DROPIN="$DROPIN_DIR/override.conf"
+mkdir -p "$DROPIN_DIR"
+if [[ ! -f "$DROPIN" ]] || ! grep -q "NoNewPrivileges=no" "$DROPIN" 2>/dev/null; then
+  printf '[Service]\nNoNewPrivileges=no\n' > "$DROPIN"
+  systemctl daemon-reload
+  ok "systemd override applied: NoNewPrivileges=no (needed for ping)"
+fi
 PING_BIN=$(command -v ping 2>/dev/null || true)
-[[ -n "$PING_BIN" ]] && setcap -r "$PING_BIN" 2>/dev/null || true
+[[ -n "$PING_BIN" ]] && setcap cap_net_raw+ep "$PING_BIN" 2>/dev/null && ok "cap_net_raw set on ping"
 
 info "Restarting $SERVICE_NAME …"
 systemctl restart "$SERVICE_NAME"
