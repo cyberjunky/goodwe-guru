@@ -74,17 +74,28 @@ def new_id() -> str:
     return str(uuid.uuid4())[:8]
 
 
+_ping_perm_warned = False   # log the "no CAP_NET_RAW" diagnosis once, not every 10s
+
+
 def _ping_sync(ip: str) -> bool:
     """Blocking ping — run via executor so it works on any event loop.
     Sends 3 packets (~3 s): a single dropped packet — normal on any real
     network — shouldn't flip a device to 'off' for the whole poll cycle.
     ping's exit code is 0 if AT LEAST ONE reply came back."""
+    global _ping_perm_warned
     if platform.system() == "Windows":
         args = ["ping", "-n", "3", "-w", "1000", ip]
     else:
         args = ["ping", "-c", "3", "-W", "1", ip]
     try:
-        r = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
+        r = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=6, text=True)
+        if r.returncode != 0 and not _ping_perm_warned and r.stderr:
+            err = r.stderr.strip().lower()
+            if "operation not permitted" in err or "socket" in err:
+                _ping_perm_warned = True
+                log.error("ping is failing with a permission error (service account likely "
+                          "lacks CAP_NET_RAW): %s — device ping/ARP detection will read every "
+                          "device as off until this is fixed", r.stderr.strip())
         return r.returncode == 0
     except Exception:
         return False
