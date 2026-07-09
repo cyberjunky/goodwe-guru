@@ -234,14 +234,23 @@ async def battery_forecast_scheduler():
             sch = load_schedule()
             if sch.enabled and inverter is not None:
                 data = await fetch_forecast(load_forecast_config())   # cached (30 min)
-                kwh = current_hour_kwh(data)
-                producing = kwh >= float(sch.threshold_kwh)
-                desired = int(sch.day_dod if producing else sch.night_dod)
-                if desired != last_dod:
-                    ok = await _apply_dod_verified(desired)
-                    last_dod = desired if ok else None   # not confirmed → retry next cycle
-                    log.info("Battery forecast schedule: hour=%.2f kWh producing=%s DoD→%d (%s)",
-                             kwh, producing, desired, "ok" if ok else "unconfirmed, retrying")
+                if not data.get("watts"):
+                    # No forecast at all (fetch failed, nothing cached) — don't
+                    # guess: keep the current DoD and retry next cycle.
+                    log.warning("Battery forecast schedule: no forecast data — keeping DoD as-is")
+                else:
+                    kwh = current_hour_kwh(data)
+                    # Live PV is a network-independent sanity check: if the
+                    # panels are producing ≥ threshold right now, it's daytime
+                    # regardless of what the forecast claims.
+                    live_kw = float(latest_data.get("ppv") or 0) / 1000.0
+                    producing = max(kwh, live_kw) >= float(sch.threshold_kwh)
+                    desired = int(sch.day_dod if producing else sch.night_dod)
+                    if desired != last_dod:
+                        ok = await _apply_dod_verified(desired)
+                        last_dod = desired if ok else None   # not confirmed → retry next cycle
+                        log.info("Battery forecast schedule: hour=%.2f kWh live=%.2f kW producing=%s DoD→%d (%s)",
+                                 kwh, live_kw, producing, desired, "ok" if ok else "unconfirmed, retrying")
             else:
                 last_dod = None
         except Exception as e:

@@ -228,6 +228,26 @@ async def fetch_forecast(fc: ForecastConfig, force: bool = False) -> dict:
         "source":         source,
         "timezone":       tz,
     }
+
+    if not merged_wh_day:
+        # Both sources failed (e.g. network down). Do NOT cache the empty
+        # result — that would poison consumers (the battery scheduler read a
+        # cached-empty forecast as "0 kWh solar" and released the hold at
+        # midday). Return stale data instead if we have any.
+        stale = _mem_cache.get(cache_key)
+        if not (stale and stale.get("watt_hours_day")) and _CACHE_FILE.exists():
+            try:
+                disk = json.loads(_CACHE_FILE.read_text())
+                if disk.get("cache_key") == cache_key and disk.get("watt_hours_day"):
+                    stale = disk
+            except Exception:
+                pass
+        if stale and stale.get("watt_hours_day"):
+            log.warning("Forecast fetch failed — using stale cache from %s",
+                        time.strftime("%H:%M", time.localtime(stale.get("fetched_at", 0))))
+            return stale
+        return result
+
     _mem_cache[cache_key] = result
     try:
         _CACHE_FILE.write_text(json.dumps(result))
