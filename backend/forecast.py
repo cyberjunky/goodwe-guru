@@ -162,12 +162,14 @@ async def fetch_forecast(fc: ForecastConfig, force: bool = False) -> dict:
     cache_key = f"{_num(fc.lat)}:{_num(fc.lon)}:{json.dumps(fc.planes, sort_keys=True)}"
     if not force:
         cached = _mem_cache.get(cache_key)
-        if cached and time.time() - cached["fetched_at"] < _CACHE_TTL:
+        if cached and cached.get("watt_hours_day") and time.time() - cached["fetched_at"] < _CACHE_TTL:
             return cached
         if _CACHE_FILE.exists():
             try:
                 disk = json.loads(_CACHE_FILE.read_text())
-                if disk.get("cache_key") == cache_key and time.time() - disk.get("fetched_at", 0) < _CACHE_TTL:
+                # ignore empty cached results (poisoned by a failed fetch)
+                if (disk.get("cache_key") == cache_key and disk.get("watt_hours_day")
+                        and time.time() - disk.get("fetched_at", 0) < _CACHE_TTL):
                     _mem_cache[cache_key] = disk
                     return disk
             except Exception:
