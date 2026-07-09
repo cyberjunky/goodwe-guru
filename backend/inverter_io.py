@@ -57,13 +57,14 @@ async def apply_setting(inverter, key: str, value) -> str:
         await inverter.set_operation_mode(OperationMode.ECO_DISCHARGE, eco_mode_power=power)
         return f"ECO discharge → {power}% power"
 
-    if key == "battery_park":
-        # All-day eco discharge schedule at 0% power: the battery can't charge
-        # (it's a discharge window) and can't discharge (0 W) — it just idles
-        # at the current SoC. Firmware-independent, unlike the eco_charge SoC
-        # target. Used by the scheduler's charge cap.
-        await inverter.set_operation_mode(OperationMode.ECO_DISCHARGE, eco_mode_power=0)
-        return "battery parked (eco 0% power)"
+    if key == "charge_current":
+        # BMS-level battery charge current limit (A). 0 = no charging at all —
+        # the only reliable way to stop PV-surplus charging on this ES (the
+        # eco 0%-power park stopped grid charging but NOT solar charging, and
+        # EcoModeV1 ignores SoC targets). The scheduler's charge cap sets 0 at
+        # the cap and restores the configured normal current on release.
+        await inverter.write_setting("charge_i", int(value))
+        return f"battery charge current → {int(value)} A"
 
     if key == "dod":
         await inverter.set_ongrid_battery_dod(int(value))
