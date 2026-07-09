@@ -57,6 +57,7 @@ class NotificationConfig:
     solar_start_stop_enabled: bool  = False
     high_import_enabled:      bool  = False
     daily_summary_enabled:    bool  = True
+    inverter_offline_enabled: bool  = True
 
     # Thresholds
     bat_critical_soc:         int   = 10
@@ -64,6 +65,7 @@ class NotificationConfig:
     bat_hysteresis:           int   = 5   # must recover this many % above low threshold
     high_import_threshold_w:  int   = 3000
     daily_summary_hour:       int   = 20  # wall-clock hour (0-23) for daily summary
+    inverter_offline_min:     int   = 3   # minutes unreachable before alerting
 
 
 def load_notification_config() -> NotificationConfig:
@@ -132,9 +134,46 @@ class NotificationState:
         self.solar_active          = False
         self.high_import_sent_at   = 0.0
         self.last_daily_summary_date: date | None = None
+        self.inverter_offline_since: float | None = None
+        self.inverter_offline_sent = False
 
 
 _state = NotificationState()
+
+
+async def notify_inverter_connection(ok: bool):
+    """
+    Edge-detected inverter connectivity alert. Call with ok=False on every
+    failed poll / connect attempt, ok=True on every successful read. Sends
+    one alert after the inverter has been unreachable for inverter_offline_min
+    minutes, and one recovery message when it comes back.
+
+    Note: if the whole container loses its network, Telegram is unreachable
+    too — this only covers the inverter itself being down/off-Wi-Fi.
+    """
+    nc = load_notification_config()
+    if not nc.enabled or not nc.inverter_offline_enabled:
+        return
+    now = time.time()
+    if ok:
+        if _state.inverter_offline_sent:
+            mins = (now - (_state.inverter_offline_since or now)) / 60
+            await send_telegram(nc,
+                f"✅ <b>Inverter connection restored</b> "
+                f"(was unreachable for {mins:.0f} min)")
+        _state.inverter_offline_since = None
+        _state.inverter_offline_sent  = False
+    else:
+        if _state.inverter_offline_since is None:
+            _state.inverter_offline_since = now
+        elif (not _state.inverter_offline_sent
+                and now - _state.inverter_offline_since >= nc.inverter_offline_min * 60):
+            _state.inverter_offline_sent = True
+            await send_telegram(nc,
+                f"📵 <b>Inverter unreachable</b> for {nc.inverter_offline_min}+ minutes\n"
+                f"Check the inverter's power and Wi-Fi/network connection.\n"
+                f"The dashboard keeps running — data resumes automatically "
+                f"once the inverter is back.")
 
 
 async def check_and_notify(data: dict[str, Any], daily_stats: dict[str, Any] | None = None,

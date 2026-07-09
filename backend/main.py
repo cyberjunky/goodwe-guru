@@ -31,7 +31,7 @@ from config import settings as cfg
 from database import Database
 from tariffs import load_tariffs, save_tariffs, calc_financials
 from forecast import load_forecast_config, save_forecast_config, fetch_forecast, hourly_today, daily_forecast, clear_cache as clear_forecast_cache
-from notifications import load_notification_config, save_notification_config, check_and_notify, send_telegram
+from notifications import load_notification_config, save_notification_config, check_and_notify, send_telegram, notify_inverter_connection
 import automations as auto_engine
 import devices as dev_engine
 
@@ -62,6 +62,10 @@ async def connect_inverter():
             return
         except Exception as e:
             log.warning("Inverter connection failed: %s – retrying in 10s", e)
+            try:
+                await notify_inverter_connection(False)
+            except Exception:
+                pass
             await asyncio.sleep(10)
 
 
@@ -138,9 +142,11 @@ async def poll_inverter():
                 pass
             latest_data = data
             consecutive_errors = 0
+            asyncio.create_task(notify_inverter_connection(True))
         except Exception as e:
             consecutive_errors += 1
             log.warning("Poll error #%d: %s\n%s", consecutive_errors, e, traceback.format_exc())
+            asyncio.create_task(notify_inverter_connection(False))
             backoff = min(5 * (2 ** min(consecutive_errors - 1, 3)), 30)
             await asyncio.sleep(backoff)
             if consecutive_errors >= 3:

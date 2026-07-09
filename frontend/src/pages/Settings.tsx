@@ -270,6 +270,7 @@ function NotificationSettings() {
     { key: 'bat_low_enabled',           label: 'Battery low',               desc: `SoC ≤ ${cfg.bat_low_soc ?? 20}%` },
     { key: 'bat_full_enabled',          label: 'Battery full',              desc: 'SoC reaches 100%' },
     { key: 'fault_enabled',             label: 'Fault code detected',       desc: 'Any inverter fault / fault cleared' },
+    { key: 'inverter_offline_enabled',  label: 'Inverter unreachable',      desc: `No connection for ${cfg.inverter_offline_min ?? 3}+ min / restored` },
     { key: 'grid_outage_enabled',       label: 'Grid outage',               desc: 'Switched to backup / grid restored' },
     { key: 'solar_start_stop_enabled',  label: 'Solar start / stop',        desc: 'Production begins & ends each day' },
     { key: 'high_import_enabled',       label: 'High grid import',          desc: `Grid import > ${cfg.high_import_threshold_w ?? 3000} W` },
