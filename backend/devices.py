@@ -43,6 +43,9 @@ class Device:
 
 # id → True (on) / False (off)
 device_states: dict[str, bool] = {}
+# id → consecutive failed checks since last confirmed "on" (debounce noisy pings)
+_fail_streak: dict[str, int] = {}
+_OFF_DEBOUNCE = 2   # confirmations required before flipping on → off
 
 
 def load_devices() -> list[Device]:
@@ -72,13 +75,16 @@ def new_id() -> str:
 
 
 def _ping_sync(ip: str) -> bool:
-    """Blocking ping — run via executor so it works on any event loop."""
+    """Blocking ping — run via executor so it works on any event loop.
+    Sends 3 packets (~3 s): a single dropped packet — normal on any real
+    network — shouldn't flip a device to 'off' for the whole poll cycle.
+    ping's exit code is 0 if AT LEAST ONE reply came back."""
     if platform.system() == "Windows":
-        args = ["ping", "-n", "1", "-w", "1000", ip]
+        args = ["ping", "-n", "3", "-w", "1000", ip]
     else:
-        args = ["ping", "-c", "1", "-W", "1", ip]
+        args = ["ping", "-c", "3", "-W", "1", ip]
     try:
-        r = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4)
+        r = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
         return r.returncode == 0
     except Exception:
         return False
@@ -194,11 +200,20 @@ async def poll_devices_loop() -> None:
             enabled = [d for d in devs if d.enabled]
             results = await asyncio.gather(*(check_device(d) for d in enabled), return_exceptions=True)
             for d, res in zip(enabled, results):
-                device_states[d.id] = bool(res) if not isinstance(res, Exception) else device_states.get(d.id, False)
+                seen_on = bool(res) if not isinstance(res, Exception) else device_states.get(d.id, False)
+                if seen_on:
+                    _fail_streak[d.id] = 0
+                    device_states[d.id] = True
+                else:
+                    _fail_streak[d.id] = _fail_streak.get(d.id, 0) + 1
+                    if _fail_streak[d.id] >= _OFF_DEBOUNCE:
+                        device_states[d.id] = False
+                    # else: keep the previous state (transient miss)
             valid = {d.id for d in devs}
             for stale in list(device_states):
                 if stale not in valid:
                     del device_states[stale]
+                    _fail_streak.pop(stale, None)
         except Exception as e:
             log.warning("poll_devices_loop: %s", e)
         await asyncio.sleep(10)
