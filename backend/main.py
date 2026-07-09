@@ -233,6 +233,7 @@ async def battery_forecast_scheduler():
     from inverter_io import apply_setting
     last_dod = None
     last_cap_state = None   # 'capped' (ECO hold at max_soc) | 'normal' (General)
+    soc_at_park = 0.0       # SoC when the park engaged (watchdog baseline)
     await asyncio.sleep(60)
     while True:
         try:
@@ -269,6 +270,7 @@ async def battery_forecast_scheduler():
                         if producing and soc >= cap and last_cap_state != "capped":
                             await apply_setting(inverter, "battery_park", 0)
                             last_cap_state = "capped"
+                            soc_at_park = soc
                             log.info("Battery charge cap: SoC %.0f%% ≥ %d%% — battery parked", soc, cap)
                         elif producing and 0 < soc <= cap - 3 and last_cap_state == "capped":
                             # SoC somehow dropped well below the cap — resume solar charging
@@ -279,19 +281,21 @@ async def battery_forecast_scheduler():
                             await apply_setting(inverter, "work_mode", 0)
                             last_cap_state = "normal"
                             log.info("Battery charge cap: evening — back to General mode")
-                        elif last_cap_state == "capped" and soc >= cap + 5:
-                            # Watchdog: parked but SoC still climbing — firmware
-                            # isn't honouring the park. Warn (once per hour).
-                            log.warning("Charge cap NOT holding: SoC %.0f%% > cap %d%% while parked", soc, cap)
+                        elif last_cap_state == "capped" and soc >= soc_at_park + 3:
+                            # Watchdog: SoC has RISEN since the park engaged —
+                            # the firmware isn't honouring it. (Compare against
+                            # the SoC at park time, NOT the cap: the battery may
+                            # legitimately have been parked above the cap.)
+                            log.warning("Charge cap NOT holding: SoC %.0f%% (was %.0f%% at park)", soc, soc_at_park)
                             global _cap_alert_at
                             if time.time() - _cap_alert_at > 3600:
                                 _cap_alert_at = time.time()
                                 try:
                                     nc = load_notification_config()
                                     await send_telegram(nc,
-                                        f"⚠️ <b>Charge cap not holding</b> — battery at {soc:.0f}% "
-                                        f"(cap {cap}%). The inverter ignored the park command; "
-                                        f"switch to General mode manually and check ARM firmware.")
+                                        f"⚠️ <b>Charge cap not holding</b> — battery rose to {soc:.0f}% "
+                                        f"after being parked at {soc_at_park:.0f}% (cap {cap}%). "
+                                        f"Switch to General mode manually.")
                                 except Exception:
                                     pass
             else:
