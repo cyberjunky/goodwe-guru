@@ -119,7 +119,18 @@ if [[ ! -f "$DROPIN" ]] || ! grep -q "NoNewPrivileges=no" "$DROPIN" 2>/dev/null;
   ok "systemd override applied: NoNewPrivileges=no (needed for ping)"
 fi
 PING_BIN=$(command -v ping 2>/dev/null || true)
-[[ -n "$PING_BIN" ]] && setcap cap_net_raw+ep "$PING_BIN" 2>/dev/null && ok "cap_net_raw set on ping"
+# NOTE: must not abort the script (set -e) if setcap fails for any reason —
+# that would skip the restart below and leave the OLD sandbox config running,
+# silently, with no restart ever happening. That exact bug is why this note
+# exists: the fix looked applied (systemctl show reflected the new unit) but
+# the live process was never restarted to pick it up.
+if [[ -n "$PING_BIN" ]]; then
+  if setcap cap_net_raw+ep "$PING_BIN" 2>/dev/null; then
+    ok "cap_net_raw set on ping"
+  else
+    warn "setcap on ping failed — device ping detection may not work; continuing anyway"
+  fi
+fi
 
 info "Restarting $SERVICE_NAME …"
 systemctl restart "$SERVICE_NAME"
