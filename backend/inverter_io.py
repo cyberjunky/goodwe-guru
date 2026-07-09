@@ -42,16 +42,28 @@ async def apply_setting(inverter, key: str, value) -> str:
         return f"operation mode → {mode.name}"
 
     if key == "eco_charge":
-        # Eco mode, all-day charge schedule capped at a target SoC. Charging
-        # (grid or solar) stops at the target; the battery is not discharged.
+        # Eco mode, all-day GRID charge schedule. CAUTION: the SoC target is only
+        # honoured on EcoModeV2 firmware (ES ARM fw ≥ 14). EcoModeV1 has no SoC
+        # field in the schedule — encode_charge() silently drops it and the
+        # inverter charges from the grid with NO cap. Callers MUST pair this
+        # with a stop rule (automation or the scheduler's charge cap).
         soc = max(10, min(int(value), 100))
         await inverter.set_operation_mode(OperationMode.ECO_CHARGE,
                                           eco_mode_power=100, eco_mode_soc=soc)
         return f"ECO charge → target {soc}%"
 
     if key == "eco_discharge":
-        await inverter.set_operation_mode(OperationMode.ECO_DISCHARGE, eco_mode_power=100)
-        return "ECO discharge (all day)"
+        power = max(0, min(int(value), 100))
+        await inverter.set_operation_mode(OperationMode.ECO_DISCHARGE, eco_mode_power=power)
+        return f"ECO discharge → {power}% power"
+
+    if key == "battery_park":
+        # All-day eco discharge schedule at 0% power: the battery can't charge
+        # (it's a discharge window) and can't discharge (0 W) — it just idles
+        # at the current SoC. Firmware-independent, unlike the eco_charge SoC
+        # target. Used by the scheduler's charge cap.
+        await inverter.set_operation_mode(OperationMode.ECO_DISCHARGE, eco_mode_power=0)
+        return "battery parked (eco 0% power)"
 
     if key == "dod":
         await inverter.set_ongrid_battery_dod(int(value))

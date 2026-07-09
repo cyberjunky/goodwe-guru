@@ -239,7 +239,7 @@ async def execute(action: dict, inverter: Any) -> str:
 
     elif atype == "eco_discharge":
         if inverter:
-            return await apply_setting(inverter, "eco_discharge", 100)
+            return await apply_setting(inverter, "eco_discharge", int(action.get("value") or 100))
 
     elif atype == "notify":
         msg = action.get("message", "Automation triggered")

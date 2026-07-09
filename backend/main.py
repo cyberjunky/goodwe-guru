@@ -224,6 +224,9 @@ async def _apply_dod_verified(target: int, tries: int = 3) -> bool:
     return last_read is None
 
 
+_cap_alert_at: float = 0.0   # last "cap not holding" Telegram alert (rate limit)
+
+
 async def battery_forecast_scheduler():
     from battery_schedule import load_schedule
     from forecast import current_hour_kwh
@@ -255,20 +258,42 @@ async def battery_forecast_scheduler():
                                  kwh, live_kw, producing, desired, "ok" if ok else "unconfirmed, retrying")
 
                     # Charge cap: General mode has no max-SoC on ES, so once the
-                    # battery hits the cap while the sun is out, hold it there in
-                    # ECO_CHARGE(max_soc) (charging stops at target, no discharge).
-                    # Evening → back to General so the battery can power the house.
+                    # battery hits the cap while the sun is out, park it with a
+                    # 0%-power eco schedule (no charge, no discharge). NOT
+                    # ECO_CHARGE(soc): EcoModeV1 firmware ignores the SoC target
+                    # and grid-charges without limit. Evening → back to General
+                    # so the battery can power the house.
                     cap = int(getattr(sch, "max_soc", 100) or 100)
                     if 0 < cap < 100:
                         soc = float(latest_data.get("battery_soc") or 0)
                         if producing and soc >= cap and last_cap_state != "capped":
-                            await apply_setting(inverter, "eco_charge", cap)
+                            await apply_setting(inverter, "battery_park", 0)
                             last_cap_state = "capped"
-                            log.info("Battery charge cap: SoC %.0f%% ≥ %d%% — ECO hold at cap", soc, cap)
+                            log.info("Battery charge cap: SoC %.0f%% ≥ %d%% — battery parked", soc, cap)
+                        elif producing and 0 < soc <= cap - 3 and last_cap_state == "capped":
+                            # SoC somehow dropped well below the cap — resume solar charging
+                            await apply_setting(inverter, "work_mode", 0)
+                            last_cap_state = "normal"
+                            log.info("Battery charge cap: SoC %.0f%% ≤ %d%% — resume charging (General)", soc, cap - 3)
                         elif not producing and last_cap_state != "normal":
                             await apply_setting(inverter, "work_mode", 0)
                             last_cap_state = "normal"
                             log.info("Battery charge cap: evening — back to General mode")
+                        elif last_cap_state == "capped" and soc >= cap + 5:
+                            # Watchdog: parked but SoC still climbing — firmware
+                            # isn't honouring the park. Warn (once per hour).
+                            log.warning("Charge cap NOT holding: SoC %.0f%% > cap %d%% while parked", soc, cap)
+                            global _cap_alert_at
+                            if time.time() - _cap_alert_at > 3600:
+                                _cap_alert_at = time.time()
+                                try:
+                                    nc = load_notification_config()
+                                    await send_telegram(nc,
+                                        f"⚠️ <b>Charge cap not holding</b> — battery at {soc:.0f}% "
+                                        f"(cap {cap}%). The inverter ignored the park command; "
+                                        f"switch to General mode manually and check ARM firmware.")
+                                except Exception:
+                                    pass
             else:
                 last_dod = None
                 last_cap_state = None
