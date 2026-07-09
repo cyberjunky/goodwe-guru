@@ -220,10 +220,18 @@ apt-get install -y -qq \
 
 ok "Base packages installed"
 
-# Allow ping (ICMP) for device detection — survives via the systemd
-# AmbientCapabilities below; setcap here covers direct/dev runs outside systemd.
+# Device ping detection gets CAP_NET_RAW from the systemd unit's
+# AmbientCapabilities (below) — NOT from setcap on the ping binary itself.
+# The service runs with NoNewPrivileges=yes, under which execing a binary
+# that carries its OWN file capability (as setcap would give it) triggers a
+# kernel "secure exec" transition that clears the parent's ambient set on
+# the child — so a setcap'd ping silently loses cap_net_raw the moment
+# uvicorn spawns it, while still working fine from an interactive root/sudo
+# shell (which has no NoNewPrivileges). Make sure ping has no lingering file
+# capability from a previous install/update, so ambient inheritance applies.
 PING_BIN=$(command -v ping 2>/dev/null || true)
-[[ -n "$PING_BIN" ]] && setcap cap_net_raw+ep "$PING_BIN" && ok "cap_net_raw granted to ping"
+[[ -n "$PING_BIN" ]] && setcap -r "$PING_BIN" 2>/dev/null
+ok "ping relies on systemd AmbientCapabilities (no file capability set)"
 
 # ── Node.js ───────────────────────────────────────────────────────────────────
 if ! command -v node &>/dev/null || [[ "$(node --version | cut -d. -f1 | tr -d v)" -lt "$NODE_MAJOR" ]]; then

@@ -105,9 +105,13 @@ fi
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 
-# Re-apply ping capability in case apt upgraded iputils-ping and stripped it
+# Ping detection relies on the systemd unit's AmbientCapabilities, not a
+# file capability on the binary — the two conflict under NoNewPrivileges=yes
+# (execing a capability-carrying binary clears the parent's ambient set on
+# the child). Strip any file capability apt may have (re-)added so ambient
+# inheritance keeps working. See install.sh for the full explanation.
 PING_BIN=$(command -v ping 2>/dev/null || true)
-[[ -n "$PING_BIN" ]] && setcap cap_net_raw+ep "$PING_BIN" 2>/dev/null && ok "cap_net_raw re-applied to ping" || true
+[[ -n "$PING_BIN" ]] && setcap -r "$PING_BIN" 2>/dev/null || true
 
 info "Restarting $SERVICE_NAME …"
 systemctl restart "$SERVICE_NAME"
