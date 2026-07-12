@@ -180,6 +180,38 @@ Via the [goodwe Python library](https://github.com/mletenay/home-assistant-goodw
 
 ---
 
+## Inverter firmware (ARM/DSP) updates
+
+This is separate from *this app's* update mechanism above — it's the
+inverter's own onboard firmware, and GoodWe doesn't offer it as a self-service
+download from goodwe.com. It matters here because certain features (e.g. a
+real battery SoC-upper-limit / stop-charge register on ES units) are gated by
+ARM firmware version — check `arm_version` in the app's `/api/status` or the
+SolarGo app's Device Info screen (shows DSP/ARM version numbers directly).
+
+- **Where the files come from:** installers/distributors share the ARM
+  (`*_master.out`, `*_slave.out`) and DSP firmware files plus the `EzFlash`
+  updater and `DataSend.exe` tool via a shared Dropbox folder — not a public
+  GoodWe download page. Ask your installer/distributor for the current files
+  for your model, or open a support ticket with GoodWe directly (mention your
+  serial number and current DSP/ARM versions).
+- **How it's flashed:** locally, over USB, with the `DataSend.exe` tool (`EzFlash`
+  for older units needing the master/slave `.out` files first). Requires the
+  grid and all loads switched off and only one DC (PV) source connected during
+  the flash — this is a hands-on, on-site procedure, not an OTA/app update.
+- Newer ES units (shipped after March 2019) reportedly only need the
+  `DataSend` step, skipping `EzFlash`.
+- GoodWe's own SolarGo app also has a firmware-update flow for some models —
+  see the SolarGo onsite-upgrade guide below.
+
+References:
+- [GoodWe ES/EM Firmware Updating Guide (PDF, Segen Solar)](https://portal.segensolar.co.za/reseller/docs/Full%20Firmware%20Update%20Guide%20V09.pdf)
+- [GoodWe ES Firmware Updating Manual (ManualsLib)](https://www.manualslib.com/manual/1651603/Goodwe-Es.html)
+- [GoodWe Onsite Upgrading via SolarGo app (PDF)](https://www.austraenergy.com.au/wp-content/uploads/2021/12/Goodwe-Onsite-Upgrading-via-SolarGo-app-V1.0.pdf)
+- [GoodWe document downloads](https://en.goodwe.com/document-download)
+
+---
+
 ## License
 
 MIT
