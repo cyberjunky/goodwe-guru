@@ -3,6 +3,8 @@
 *.xapk
 apk_assets/
 apk_extracted/
+android/extracted/
+android/decompiled/
 
 # ── Frontend build artifacts ──────────────────────────────────────────────────
 frontend/node_modules/
