@@ -224,16 +224,27 @@ async def _apply_dod_verified(target: int, tries: int = 3) -> bool:
     return last_read is None
 
 
-_cap_alert_at: float = 0.0   # last "cap not holding" Telegram alert (rate limit)
-
-
 async def battery_forecast_scheduler():
+    """
+    DoD-only battery schedule. IMPORTANT: there is no software charge cap on
+    this ES — the goodwe library has no dedicated method for battery charge
+    current / max charge SoC (only set_ongrid_battery_dod for the discharge
+    floor), and every generic-write attempt at one (eco-mode SoC target,
+    charge_i, an eco 0%-power "park") was confirmed silently ignored by the
+    inverter (see git history around 2026-07-09/10 and CLAUDE.md). PV surplus
+    charges the battery to 100% on a sunny day regardless of anything this
+    app writes.
+
+    What this DOES do: hold the battery (DoD 0, no discharge) only while
+    producing AND below the release threshold (`max_soc`). Once SoC reaches
+    that threshold, the hold is released (DoD -> night_dod) so the battery
+    can discharge the moment load exceeds production, instead of being
+    locked at 100% with no way down for hours. This can't prevent the peak,
+    only stop making the dwell time at that peak worse.
+    """
     from battery_schedule import load_schedule
     from forecast import current_hour_kwh
-    from inverter_io import apply_setting
     last_dod = None
-    last_cap_state = None   # 'capped' (ECO hold at max_soc) | 'normal' (General)
-    soc_at_park = 0.0       # SoC when the park engaged (watchdog baseline)
     await asyncio.sleep(60)
     while True:
         try:
@@ -251,57 +262,17 @@ async def battery_forecast_scheduler():
                     # regardless of what the forecast claims.
                     live_kw = float(latest_data.get("ppv") or 0) / 1000.0
                     producing = max(kwh, live_kw) >= float(sch.threshold_kwh)
-                    desired = int(sch.day_dod if producing else sch.night_dod)
+                    soc = float(latest_data.get("battery_soc") or 0)
+                    release_at = int(getattr(sch, "max_soc", 100) or 100)
+                    held = producing and (release_at >= 100 or soc < release_at)
+                    desired = int(sch.day_dod if held else sch.night_dod)
                     if desired != last_dod:
                         ok = await _apply_dod_verified(desired)
                         last_dod = desired if ok else None   # not confirmed → retry next cycle
-                        log.info("Battery forecast schedule: hour=%.2f kWh live=%.2f kW producing=%s DoD→%d (%s)",
-                                 kwh, live_kw, producing, desired, "ok" if ok else "unconfirmed, retrying")
-
-                    # Charge cap: nothing in this ES firmware caps charge SoC —
-                    # EcoModeV1 ignores SoC targets, and a 0%-power eco park
-                    # stops grid charging but NOT PV-surplus charging. The only
-                    # reliable stop is the BMS charge-current limit: 0 A at the
-                    # cap, restored to charge_a when released / in the evening.
-                    cap = int(getattr(sch, "max_soc", 100) or 100)
-                    charge_a = int(getattr(sch, "charge_a", 40) or 40)
-                    if 0 < cap < 100:
-                        soc = float(latest_data.get("battery_soc") or 0)
-                        if producing and soc >= cap and last_cap_state != "capped":
-                            await apply_setting(inverter, "charge_current", 0)
-                            last_cap_state = "capped"
-                            soc_at_park = soc
-                            log.info("Battery charge cap: SoC %.0f%% ≥ %d%% — charge current → 0 A", soc, cap)
-                        elif producing and 0 < soc <= cap - 3 and last_cap_state == "capped":
-                            # SoC dropped well below the cap — resume charging
-                            await apply_setting(inverter, "charge_current", charge_a)
-                            last_cap_state = "normal"
-                            log.info("Battery charge cap: SoC %.0f%% ≤ %d%% — charge current → %d A", soc, cap - 3, charge_a)
-                        elif not producing and last_cap_state != "normal":
-                            await apply_setting(inverter, "charge_current", charge_a)
-                            await apply_setting(inverter, "work_mode", 0)   # also clears eco leftovers
-                            last_cap_state = "normal"
-                            log.info("Battery charge cap: evening — charge current → %d A, General mode", charge_a)
-                        elif last_cap_state == "capped" and soc >= soc_at_park + 3:
-                            # Watchdog: SoC has RISEN since the park engaged —
-                            # the firmware isn't honouring it. (Compare against
-                            # the SoC at park time, NOT the cap: the battery may
-                            # legitimately have been parked above the cap.)
-                            log.warning("Charge cap NOT holding: SoC %.0f%% (was %.0f%% at park)", soc, soc_at_park)
-                            global _cap_alert_at
-                            if time.time() - _cap_alert_at > 3600:
-                                _cap_alert_at = time.time()
-                                try:
-                                    nc = load_notification_config()
-                                    await send_telegram(nc,
-                                        f"⚠️ <b>Charge cap not holding</b> — battery rose to {soc:.0f}% "
-                                        f"after being parked at {soc_at_park:.0f}% (cap {cap}%). "
-                                        f"Switch to General mode manually.")
-                                except Exception:
-                                    pass
+                        log.info("Battery forecast schedule: hour=%.2f kWh live=%.2f kW soc=%.0f%% held=%s DoD→%d (%s)",
+                                 kwh, live_kw, soc, held, desired, "ok" if ok else "unconfirmed, retrying")
             else:
                 last_dod = None
-                last_cap_state = None
         except Exception as e:
             log.warning("battery_forecast_scheduler: %s", e)
         await asyncio.sleep(300)   # check every 5 min; writes only on transition

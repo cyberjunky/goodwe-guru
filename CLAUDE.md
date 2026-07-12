@@ -39,13 +39,26 @@ battery while the current hour's solar forecast ≥ a threshold, discharges belo
 — ~2 writes/day, flash-safe. (Inverter NVM has limited write endurance: never write
 settings on a tight loop.)
 
-**There is no native charge-SoC cap on ES** — General mode charges the battery to
-100% with excess solar. The scheduler enforces `max_soc` (default 80, 100 = off):
-when producing and SoC ≥ cap it switches to `ECO_CHARGE(max_soc)` (charging stops
-at the target, no discharge), and back to General when production ends. The
-"producing" check uses live PV (`ppv`) alongside the forecast so a wrong/missing
-forecast can't flip settings, and a failed forecast fetch is never cached (a
-poisoned empty cache once released the hold at midday).
+**There is no charge-SoC cap on ES, and none of this app's writes can create one.**
+General mode charges the battery to 100% with any excess solar — confirmed by
+exhausting every candidate: the `ECO_CHARGE` eco-mode SoC target is ignored by
+EcoModeV1 firmware (ARM fw < 14), an eco 0%-power "park" schedule stops grid
+charging but not PV-surplus charging, and a generic `write_setting("charge_i", 0)`
+BMS current-limit write is accepted but has zero effect (same silently-ignored-
+generic-write class as `work_mode`/`dod` before their dedicated methods were
+found — except here there IS no dedicated method). Do not reintroduce any of
+these as a "fix" — see git history 2026-07-09/10 for the full trail. If a real
+fix exists it's likely GoodWe-app-only, same precedent as `backup_supply`.
+
+What the scheduler's `max_soc` field actually does: it's a release threshold,
+not a cap. While producing and SoC is below it, the battery is held (DoD 0, no
+discharge); once SoC reaches it, the hold releases (DoD 80) so the battery can
+discharge as soon as load exceeds production, instead of being locked at a high
+SoC for hours with no way down. It cannot stop the SoC peak itself, only the
+prolonged dwell time at that peak. The "producing" check uses live PV (`ppv`)
+alongside the forecast so a wrong/missing forecast can't flip settings, and a
+failed forecast fetch is never cached (a poisoned empty cache once released the
+hold at midday).
 
 ## Stack
 

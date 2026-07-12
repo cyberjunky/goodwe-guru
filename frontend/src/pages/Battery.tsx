@@ -110,13 +110,13 @@ function DischargeControl() {
           )}
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-400">
-          <span>Charge cap</span>
-          <input type="number" step="1" min="50" max="100" defaultValue={sched?.max_soc ?? 80}
+          <span>Release hold at</span>
+          <input type="number" step="1" min="50" max="100" defaultValue={sched?.max_soc ?? 100}
             onBlur={e => setMaxSoc(parseFloat(e.target.value))}
             className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-right text-white" />
           <span>% SoC</span>
           <span className="ml-auto text-gray-500">
-            stops charging here (100 = no cap) — protects battery life
+            not a charge cap — this ES can't stop PV charging past it; only stops the discharge hold once reached
           </span>
         </div>
       </div>

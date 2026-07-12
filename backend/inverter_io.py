@@ -11,6 +11,16 @@ Confirmed on ES (platform 105):
   - set_operation_mode(OperationMode)      work mode actually sticks
   - set_ongrid_battery_dod(dod)            depth-of-discharge floor (0 = no discharge)
   - set_grid_export_limit(watts)
+
+NOTE: there is no dedicated method (and no working generic write) to cap
+battery CHARGE SoC on this ES. Tried and confirmed non-functional: the
+ECO_CHARGE eco_mode_soc target (ignored by EcoModeV1 firmware), an eco
+0%-power "park" schedule (stops grid charging, not PV-surplus charging),
+and a generic write_setting("charge_i", 0) BMS current limit (accepted,
+zero effect — same class of silently-ignored generic write as work_mode/dod
+before their dedicated methods were found). Don't reintroduce any of these;
+if a genuine fix exists it's likely GoodWe-app-only, same precedent as
+backup_supply (see CLAUDE.md).
 """
 
 import logging
@@ -56,15 +66,6 @@ async def apply_setting(inverter, key: str, value) -> str:
         power = max(0, min(int(value), 100))
         await inverter.set_operation_mode(OperationMode.ECO_DISCHARGE, eco_mode_power=power)
         return f"ECO discharge → {power}% power"
-
-    if key == "charge_current":
-        # BMS-level battery charge current limit (A). 0 = no charging at all —
-        # the only reliable way to stop PV-surplus charging on this ES (the
-        # eco 0%-power park stopped grid charging but NOT solar charging, and
-        # EcoModeV1 ignores SoC targets). The scheduler's charge cap sets 0 at
-        # the cap and restores the configured normal current on release.
-        await inverter.write_setting("charge_i", int(value))
-        return f"battery charge current → {int(value)} A"
 
     if key == "dod":
         await inverter.set_ongrid_battery_dod(int(value))
