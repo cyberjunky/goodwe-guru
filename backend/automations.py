@@ -325,9 +325,14 @@ async def run_loop(get_data, get_inverter):
 TEMPLATES = [
     {
         "id":          "tpl_max_soc",
-        "name":        "Max SoC Limit",
-        "description": "Stop charging when battery reaches the target SoC. "
-                       "Emulates the upper SoC cap in Self-Use mode.",
+        "name":        "Max SoC Limit (does NOT stop charging)",
+        "description": "⚠️ Switches to General mode above the target SoC — but General "
+                       "mode is usually already the active mode, so this is a near no-op. "
+                       "There is NO way on this ES firmware to actually cap/stop battery "
+                       "charging from solar surplus (every mechanism tried — eco-mode SoC "
+                       "target, charge-current limit, force-charge target — is confirmed "
+                       "silently ignored or inapplicable to solar charging). Kept for "
+                       "compatibility; don't rely on this to protect the battery.",
         "logic":       "AND",
         "conditions":  [{"sensor": "battery_soc", "op": "gte", "value": 80, "value2": 0}],
         "actions":     [
@@ -344,7 +349,9 @@ TEMPLATES = [
         "id":          "tpl_min_soc",
         "name":        "Min SoC Floor",
         "description": "Stop discharging when battery drops below target SoC. "
-                       "Protects battery life and ensures a backup reserve.",
+                       "Protects battery life and ensures a backup reserve. "
+                       "Note: the ECO-charge target this uses to recharge is a best-effort "
+                       "boost, not a hard stop — it may overshoot past the target SoC.",
         "logic":       "AND",
         "conditions":  [{"sensor": "battery_soc", "op": "lte", "value": 20, "value2": 0}],
         "actions":     [
@@ -361,10 +368,11 @@ TEMPLATES = [
     {
         "id":          "tpl_self_use",
         "name":        "Self-Use Emulation (ES)",
-        "description": "Creates two automations that together replicate Self-Use mode: "
-                       "max SoC cap (default 90%) and min SoC floor (default 15%). "
-                       "Between these limits the inverter operates in General mode "
-                       "which already prioritises solar self-consumption on the ES.",
+        "description": "Creates two automations: a min SoC floor (default 15%, real — "
+                       "on-grid DoD works reliably) and a 'max SoC' rule that switches to "
+                       "General mode above 90% — this does NOT actually stop charging (no "
+                       "mechanism on this ES firmware can cap solar-surplus charging). "
+                       "Between these the inverter runs General mode's normal self-use logic.",
         "multi":       True,   # creates multiple automations
         "params":      [
             {"key": "max_soc", "label": "Max SoC (%)",  "type": "number", "min": 60, "max": 99, "default": 90},
@@ -375,8 +383,12 @@ TEMPLATES = [
     {
         "id":          "tpl_night_charge",
         "name":        "Night Charging Window",
-        "description": "Force-charge the battery during cheap overnight tariff hours "
-                       "when SoC is below a threshold.",
+        "description": "⚠️ Force-charge the battery (from GRID) during cheap overnight "
+                       "tariff hours when SoC is below a threshold. The target SoC is a "
+                       "best-effort ECO-mode target, NOT a hard stop — it is confirmed to "
+                       "keep charging from the grid past the target on this firmware. "
+                       "Pair with Min SoC Floor / monitor manually, or you may rack up "
+                       "unexpected grid-import cost overnight.",
         "logic":       "AND",
         "conditions":  [
             {"sensor": "battery_soc", "op": "lt", "value": 80, "value2": 0},
@@ -418,7 +430,9 @@ TEMPLATES = [
         "name":        "Pre-Evening Charge Boost",
         "description": "If the battery is below a target SoC before a set hour "
                        "(e.g. 16:00), force-charge it so you can get through the night "
-                       "without grid imports. Pair with Min SoC Floor to protect the reserve.",
+                       "without grid imports. Pair with Min SoC Floor to protect the reserve. "
+                       "Note: the SoC target is a best-effort ECO-mode boost, not a hard "
+                       "stop — it may keep charging (from grid if needed) past the target.",
         "logic":       "AND",
         "conditions":  [
             {"sensor": "battery_soc", "op": "lt", "value": 85, "value2": 0},
@@ -480,7 +494,10 @@ TEMPLATES = [
                        "2. Restore export when battery full\n"
                        "3. Pre-evening boost (charge if SoC < target before 15:00)\n"
                        "4. Min SoC floor to protect battery overnight\n"
-                       "This is the closest to Self-Use mode on the ES.",
+                       "This is the closest to Self-Use mode on the ES. ⚠️ Rules 1-3 do NOT "
+                       "cap/stop battery charging — no mechanism on this firmware can. "
+                       "Rule 4 (discharge floor via DoD) and export-limit changes are real "
+                       "and reliable; the SoC targets in rules 2-3 are best-effort only.",
         "multi":       True,
         "params":      [
             {"key": "max_soc",   "label": "Max SoC / full battery (%)", "type": "number",

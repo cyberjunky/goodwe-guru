@@ -61,54 +61,6 @@ function NumInput({ value, onChange, min, max, unit }: { value: number; onChange
 }
 
 
-function EcoSlot({ n, slot, onChange }: { n: number; slot: EcoSlotData; onChange: (s: EcoSlotData) => void }) {
-  return (
-    <div className="bg-gray-800 border border-gray-700 rounded-xl p-4">
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-sm font-medium text-gray-300">Schedule {n}</span>
-        <Toggle checked={slot.enabled} onChange={v => onChange({ ...slot, enabled: v })} />
-      </div>
-      <div className="grid grid-cols-2 gap-3 text-xs">
-        <div>
-          <div className="text-gray-500 mb-1">Start</div>
-          <input type="time" value={slot.start} onChange={e => onChange({ ...slot, start: e.target.value })}
-            className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white text-xs" />
-        </div>
-        <div>
-          <div className="text-gray-500 mb-1">End</div>
-          <input type="time" value={slot.end} onChange={e => onChange({ ...slot, end: e.target.value })}
-            className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white text-xs" />
-        </div>
-        <div className="col-span-2">
-          <div className="text-gray-500 mb-1">Power limit (W)</div>
-          <input type="number" min={0} max={10000} value={slot.power}
-            onChange={e => onChange({ ...slot, power: +e.target.value })}
-            className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white text-xs" />
-        </div>
-        <div>
-          <div className="text-gray-500 mb-1">Min SoC (%)</div>
-          <input type="number" min={0} max={100} value={slot.socMin}
-            onChange={e => onChange({ ...slot, socMin: +e.target.value })}
-            className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white text-xs" />
-        </div>
-        <div>
-          <div className="text-gray-500 mb-1">Mode</div>
-          <select value={slot.charge ? 'charge' : 'discharge'}
-            onChange={e => onChange({ ...slot, charge: e.target.value === 'charge' })}
-            className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white text-xs">
-            <option value="charge">Charge</option>
-            <option value="discharge">Discharge</option>
-          </select>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-interface EcoSlotData { enabled: boolean; start: string; end: string; power: number; socMin: number; charge: boolean }
-
-const DEFAULT_ECO: EcoSlotData = { enabled: false, start: '00:00', end: '06:00', power: 2500, socMin: 10, charge: true }
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Tariff settings panel
 // ─────────────────────────────────────────────────────────────────────────────
@@ -827,7 +779,6 @@ export default function Settings() {
   const [local, setLocal] = useState<Record<string, unknown>>({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [ecoSlots, setEcoSlots] = useState<EcoSlotData[]>([DEFAULT_ECO, DEFAULT_ECO, DEFAULT_ECO, DEFAULT_ECO])
 
   useEffect(() => { loadSettings() }, [])
   useEffect(() => { setLocal(settings) }, [settings])
@@ -963,11 +914,11 @@ export default function Settings() {
                 ? <span className="text-xs text-gray-400">{local.backup_supply ? 'On' : 'Off'} <span className="text-gray-600">(set in SolarGo)</span></span>
                 : <Toggle checked={!!(local.backup_supply)} onChange={v => set('backup_supply', v)} />}
             </GridSetting>
-            <GridSetting label="Fast Charging" desc="Fast charge (FW19+)">
+            <GridSetting label="Fast Charging" desc="Boost-charges from grid+solar to the target SoC, then stops the boost — NOT a charge cap (solar surplus keeps charging past the target). Confirmed 2026-07-10.">
               <Toggle checked={!!(local.fast_charging)} onChange={v => set('fast_charging', v)} />
             </GridSetting>
             {!!local.fast_charging && <>
-              <GridSetting label="Fast Charge SoC" desc="Stop at this SoC">
+              <GridSetting label="Fast Charge SoC" desc="Target for the boost, not a ceiling">
                 <NumInput value={(local.fast_charging_soc as number) ?? 90} onChange={v => set('fast_charging_soc', v)} min={50} max={100} unit="%" />
               </GridSetting>
               <GridSetting label="Fast Charge Power" desc="% of max power">
@@ -991,16 +942,6 @@ export default function Settings() {
             </GridSetting>
           </div>
         </div>
-
-      {/* Eco schedule */}
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-4">Eco Schedule (Charge/Discharge Windows)</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {ecoSlots.map((slot, i) => (
-            <EcoSlot key={i} n={i + 1} slot={slot} onChange={s => setEcoSlots(prev => prev.map((p, j) => j === i ? s : p))} />
-          ))}
-        </div>
-      </div>
 
         {/* Grid & Safety — right column of the side-by-side pair */}
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">

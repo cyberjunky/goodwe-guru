@@ -39,13 +39,23 @@ A self-hosted web dashboard for monitoring and controlling GoodWe inverters and 
 
 ### Automations — rule-based inverter control
 Emulate Self-Use mode (missing on the ES series) and any custom behaviour:
-- **Max SoC cap** — stop charging above X% (write export limit = 0 until full)
-- **Min SoC floor** — ECO charge when battery drops below Y% (overnight reserve)
+- **Zero export while charging** — export limit = 0 until SoC target, so solar
+  goes into the battery first (does NOT cap charging — see note below)
+- **Min SoC floor** — ECO charge when battery drops below Y% (overnight reserve;
+  best-effort boost, may overshoot the target — see note below)
 - **Pre-evening boost** — charge to target SoC before dark so you coast through the night
 - **Peak shaving** — start discharging when grid import exceeds W
 - **Smart Self-Use set** — 4 rules in one click (combines all of the above)
 - Built-in **hysteresis** prevents oscillation at thresholds (configurable dead band)
 - Rules fire every 30 s, optional Telegram notification on each trigger
+
+> ⚠️ **No automation or setting can cap battery charging from solar surplus on
+> this ES firmware.** Extensively tested (2026-07-09/10): the ECO-mode SoC
+> target, a BMS charge-current limit, and the "Fast Charging" boost-to-target
+> feature are all confirmed to have no effect on ongoing solar-surplus
+> charging — see `backend/inverter_io.py` and `CLAUDE.md` for the full trail.
+> The **battery discharge-hold scheduler** (below) can't prevent the SoC peak
+> either, but it does stop the battery being locked there for hours.
 
 ### Finance & sustainability
 - Import cost, export revenue, solar savings per day/month/year
