@@ -124,6 +124,51 @@ function DischargeControl() {
   )
 }
 
+/**
+ * Read-only display of the BMS/battery commissioning profile (vendor charge/
+ * discharge voltage & current, capacity). This is display-only by design —
+ * unlike DoD/work-mode/export-limit, these are BMS-protocol-compatibility
+ * settings, not safe operational dials; a wrong vendor code or voltage here
+ * can break BMS communication or push the pack outside its safe window. Set
+ * these via SEMS Plus / SolarGo, not here — this card is just so you can
+ * eyeball drift against the manufacturer spec without opening another app.
+ */
+function BatteryConfig() {
+  const { settings, loadSettings } = useInverter()
+  useEffect(() => { loadSettings() }, [])
+
+  const capacity   = settings.capacity as number | undefined
+  const chargeV    = settings.charge_v as number | undefined
+  const chargeI    = settings.charge_i as number | undefined
+  const dischargeV = settings.discharge_v as number | undefined
+  const dischargeI = settings.discharge_i as number | undefined
+
+  if (capacity === undefined && chargeV === undefined) return null
+
+  const Row = ({ label, value, unit }: { label: string; value?: number; unit: string }) => (
+    <div className="flex items-center justify-between py-1.5 border-b border-gray-800 last:border-0">
+      <span className="text-xs text-gray-500">{label}</span>
+      <span className="text-sm text-white">{value !== undefined ? `${value} ${unit}` : '—'}</span>
+    </div>
+  )
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+      <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-1 flex items-center gap-2">
+        <Cpu size={14} /> Battery Configuration (read-only)
+      </h2>
+      <p className="text-[11px] text-gray-500 mb-3 leading-relaxed">
+        BMS commissioning profile — change via SEMS Plus/SolarGo, not here.
+      </p>
+      <Row label="Capacity" value={capacity} unit="Ah" />
+      <Row label="Charge Voltage" value={chargeV} unit="V" />
+      <Row label="Charge Current" value={chargeI} unit="A" />
+      <Row label="Discharge Voltage" value={dischargeV} unit="V" />
+      <Row label="Discharge Current" value={dischargeI} unit="A" />
+    </div>
+  )
+}
+
 function SocGauge({ soc }: { soc: number }) {
   const color = soc > 60 ? '#22c55e' : soc > 20 ? '#f59e0b' : '#ef4444'
   const segments = 20
@@ -213,6 +258,7 @@ export default function Battery() {
       </div>
 
       <DischargeControl />
+      <BatteryConfig />
 
       {/* Cell-level data */}
       {maxCellV > 0 && (
