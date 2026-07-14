@@ -72,7 +72,7 @@ def _ensure_password() -> str:
 # ── Settings ──────────────────────────────────────────────────────────────────
 class Settings:
     inverter_host:  str = os.environ.get("INVERTER_HOST", "192.168.1.100")
-    poll_interval:  int = int(os.environ.get("POLL_INTERVAL", "10"))
+    poll_interval:  int = int(os.environ.get("POLL_INTERVAL", "20"))
     password:       str = _ensure_password()
     jwt_secret:     str = os.environ.get("JWT_SECRET", secrets.token_hex(32))
     jwt_expire_days:int = int(os.environ.get("JWT_EXPIRE_DAYS", "30"))

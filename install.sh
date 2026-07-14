@@ -65,8 +65,8 @@ if [[ -z "${INVERTER_HOST:-}" ]]; then
     [[ ${#APP_PASSWORD} -lt 8 ]] && { warn "Password is short (< 8 chars) — consider a stronger one"; }
   fi
 
-  read -rp "  Poll interval in seconds [10]       : " POLL_INTERVAL
-  POLL_INTERVAL=${POLL_INTERVAL:-10}
+  read -rp "  Poll interval in seconds [20]       : " POLL_INTERVAL
+  POLL_INTERVAL=${POLL_INTERVAL:-20}
 
   read -rp "  Domain for HTTPS (blank = IP-only)  : " DOMAIN
   if [[ -n "$DOMAIN" ]]; then
@@ -251,7 +251,7 @@ chmod 700 "$DATA_DIR"
 cat > "$DATA_DIR/config.env" <<EOF
 INVERTER_HOST=${INVERTER_HOST:-192.168.1.100}
 APP_PASSWORD=${APP_PASSWORD:-changeme}
-POLL_INTERVAL=${POLL_INTERVAL:-10}
+POLL_INTERVAL=${POLL_INTERVAL:-20}
 JWT_SECRET=${JWT_SECRET}
 JWT_EXPIRE_DAYS=30
 DB_PATH=${DATA_DIR}/history.db
