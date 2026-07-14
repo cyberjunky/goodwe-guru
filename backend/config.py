@@ -69,6 +69,21 @@ def _ensure_password() -> str:
     return pw
 
 
+def save_env_value(key: str, value: str) -> None:
+    """Persist one KEY=value to config.env, replacing an existing line or
+    appending. Same file resolution as the auto-generated password above."""
+    env_path = _env_file or _env_candidates[0]
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    text = env_path.read_text() if env_path.exists() else ""
+    prefix = f"{key}="
+    if prefix in text:
+        lines = [f"{prefix}{value}" if l.startswith(prefix) else l for l in text.splitlines()]
+        env_path.write_text("\n".join(lines) + "\n")
+    else:
+        with env_path.open("a") as f:
+            f.write(f"\n{prefix}{value}\n")
+
+
 # ── Settings ──────────────────────────────────────────────────────────────────
 class Settings:
     inverter_host:  str = os.environ.get("INVERTER_HOST", "192.168.1.100")

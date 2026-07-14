@@ -656,6 +656,53 @@ type SettingsTab = 'inverter' | 'tariffs' | 'notifications' | 'devices' | 'syste
 interface VersionInfo { commit?: string; branch?: string; date?: string; subject?: string }
 type UpdateState = 'idle' | 'requested' | 'running' | 'ok' | 'failed'
 
+function ConnectionSettings() {
+  const token   = localStorage.getItem('gw_token') ?? ''
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  const [host, setHost]         = useState('')
+  const [pollSec, setPollSec]   = useState(20)
+  const [saving, setSaving]     = useState(false)
+  const [saved, setSaved]       = useState(false)
+
+  useEffect(() => {
+    fetch('/api/system-config', { headers }).then(r => r.json()).then(j => {
+      setHost(j.inverter_host ?? '')
+      setPollSec(j.poll_interval ?? 20)
+    }).catch(() => {})
+  }, [])
+
+  async function save() {
+    setSaving(true)
+    try {
+      await fetch('/api/system-config', {
+        method: 'POST', headers,
+        body: JSON.stringify({ inverter_host: host, poll_interval: pollSec }),
+      })
+      setSaved(true); setTimeout(() => setSaved(false), 2500)
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4">
+      <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide">Connection</h2>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <GridSetting label="Inverter IP" desc="Changing this reconnects immediately">
+          <input value={host} onChange={e => setHost(e.target.value)} placeholder="192.168.1.100"
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-500" />
+        </GridSetting>
+        <GridSetting label="Poll Interval" desc="How often to read the inverter — the ES/AA55 stack can go unreachable if polled too aggressively">
+          <NumInput value={pollSec} onChange={setPollSec} min={5} max={300} unit="s" />
+        </GridSetting>
+      </div>
+      <button onClick={save} disabled={saving}
+        className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm px-4 py-2 rounded-lg transition-colors">
+        {saving ? <RefreshCw size={14} className="animate-spin" /> : saved ? <CheckCircle2 size={14} /> : <Save size={14} />}
+        {saved ? 'Saved' : 'Save'}
+      </button>
+    </div>
+  )
+}
+
 function SystemSettings() {
   const token   = localStorage.getItem('gw_token') ?? ''
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
@@ -713,6 +760,8 @@ function SystemSettings() {
         <Server className="text-gray-400" size={22} />
         <h1 className="text-xl font-semibold text-white">System</h1>
       </div>
+
+      <ConnectionSettings />
 
       {/* Version */}
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">

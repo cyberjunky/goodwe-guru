@@ -407,6 +407,38 @@ async def set_battery_schedule(body: dict, _: str = Depends(require_auth)):
     save_schedule(s)
     return {"ok": True}
 
+@app.get("/api/system-config")
+async def get_system_config(_: str = Depends(require_auth)):
+    return {
+        "inverter_host": cfg.inverter_host,
+        "poll_interval": cfg.poll_interval,
+    }
+
+@app.post("/api/system-config")
+async def set_system_config(body: dict, _: str = Depends(require_auth)):
+    from config import save_env_value
+    out = {}
+
+    if "poll_interval" in body:
+        seconds = int(body["poll_interval"])
+        if not (5 <= seconds <= 300):
+            raise HTTPException(400, "poll_interval must be between 5 and 300 seconds")
+        cfg.poll_interval = seconds          # takes effect on the poll loop's next sleep — no restart needed
+        save_env_value("POLL_INTERVAL", str(seconds))
+        out["poll_interval"] = seconds
+
+    if "inverter_host" in body:
+        host = str(body["inverter_host"]).strip()
+        if not host:
+            raise HTTPException(400, "inverter_host cannot be empty")
+        cfg.inverter_host = host
+        save_env_value("INVERTER_HOST", host)
+        out["inverter_host"] = host
+        log.info("Inverter host changed to %s — reconnecting …", host)
+        asyncio.create_task(connect_inverter())   # swaps the global `inverter` once connected
+
+    return {"ok": True, **out}
+
 @app.get("/api/status")
 async def get_status(_: str = Depends(require_auth)):
     return {
