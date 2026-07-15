@@ -703,6 +703,48 @@ function ConnectionSettings() {
   )
 }
 
+interface InverterVersionInfo {
+  inverter?: string; serial?: string; platform?: string
+  arm_fw?: string; firmware?: string; arm_version?: number; dsp_version?: number
+}
+
+function InverterVersion() {
+  const token   = localStorage.getItem('gw_token') ?? ''
+  const headers = { Authorization: `Bearer ${token}` }
+  const [info, setInfo] = useState<InverterVersionInfo>({})
+
+  useEffect(() => {
+    fetch('/api/status', { headers }).then(r => r.json()).then(setInfo).catch(() => {})
+  }, [])
+
+  if (!info.inverter) return null
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+      <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-4">Inverter firmware</h2>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+        <div>
+          <div className="text-xs text-gray-500 mb-0.5">Model</div>
+          <div className="text-white">{info.inverter}</div>
+        </div>
+        <div>
+          <div className="text-xs text-gray-500 mb-0.5">ARM firmware</div>
+          <div className="text-white">{info.arm_version ?? '—'}</div>
+        </div>
+        <div>
+          <div className="text-xs text-gray-500 mb-0.5">DSP firmware</div>
+          <div className="text-white">{info.dsp_version ?? '—'}</div>
+        </div>
+        <div>
+          <div className="text-xs text-gray-500 mb-0.5">Platform</div>
+          <div className="text-white">{info.platform ?? '—'}</div>
+        </div>
+      </div>
+      {info.serial && <div className="text-xs text-gray-600 mt-3 font-mono">S/N: {info.serial}</div>}
+    </div>
+  )
+}
+
 function SystemSettings() {
   const token   = localStorage.getItem('gw_token') ?? ''
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
@@ -762,6 +804,7 @@ function SystemSettings() {
       </div>
 
       <ConnectionSettings />
+      <InverterVersion />
 
       {/* Version */}
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">

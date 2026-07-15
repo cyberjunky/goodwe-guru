@@ -442,11 +442,14 @@ async def set_system_config(body: dict, _: str = Depends(require_auth)):
 @app.get("/api/status")
 async def get_status(_: str = Depends(require_auth)):
     return {
-        "inverter":  inverter.model_name    if inverter else None,
-        "serial":    inverter.serial_number if inverter else None,
-        "platform":  inverter.__class__.__name__ if inverter else None,
-        "arm_fw":    getattr(inverter, "arm_firmware", None) if inverter else None,
-        "data":      latest_data,
+        "inverter":     inverter.model_name    if inverter else None,
+        "serial":       inverter.serial_number if inverter else None,
+        "platform":     inverter.__class__.__name__ if inverter else None,
+        "arm_fw":       getattr(inverter, "arm_firmware", None) if inverter else None,
+        "firmware":     getattr(inverter, "firmware", None) if inverter else None,
+        "arm_version":  getattr(inverter, "arm_version", None) if inverter else None,
+        "dsp_version":  getattr(inverter, "dsp1_version", None) if inverter else None,
+        "data":         latest_data,
     }
 
 
