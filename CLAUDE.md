@@ -69,6 +69,22 @@ alongside the forecast so a wrong/missing forecast can't flip settings, and a
 failed forecast fetch is never cached (a poisoned empty cache once released the
 hold at midday).
 
+## Firmware update check (`firmware_check.py`)
+
+Reverse-engineered from the SolarGo 7.2.2 APK (`GoodweAPIs.getAllBinFile()` /
+`FirmwareInfoAndUpdateActivity.checkNewVersion()`) — confirmed 2026-07-15.
+POSTs live ARM/DSP version numbers to GoodWe's cloud
+(`solargo.sems.com.cn/api/Solargo/CheckUpgradePlus_v2`); the response lists
+any newer version with a direct download URL. **No GoodWe account/login is
+needed** — the request carries only a static, non-secret app-identity string
+hardcoded in every SolarGo release (`AppInfoUtils.getToken()`), not a real
+credential; this is parity with what the vendor app itself does, not a
+bypass. Checks once/day (firmware releases are infrequent); alerts via
+Telegram only on a genuinely new version (persisted in
+`firmware_check.json` so it doesn't re-alert every day). Check-only by
+design — never downloads or flashes anything; applying an update stays a
+manual, deliberate action outside this app.
+
 ## Stack
 
 ```
@@ -87,6 +103,8 @@ backend/          FastAPI + goodwe library (Modbus/UDP) + SQLite + JWT
   forecast.py     Forecast.Solar + Open-Meteo fallback (cached 30 min); captures tz;
                   current_hour_kwh() for the battery scheduler
   notifications.py Telegram alert engine (8 event types)
+  firmware_check.py  Daily ARM/DSP update check via GoodWe's cloud (no login) — see
+                     "Firmware update check" above
   telegram_bot.py  Interactive Telegram bot (long-poll getUpdates): commands +
                    inline-button menus, matplotlib charts, work-mode control,
                    automation toggles. Reuses notifications bot_token/chat_id;

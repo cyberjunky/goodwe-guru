@@ -745,6 +745,80 @@ function InverterVersion() {
   )
 }
 
+interface FirmwareUpdateEntry { type_name: string; current: number; available: number; url: string; released?: string }
+
+function FirmwareUpdateCheck() {
+  const token   = localStorage.getItem('gw_token') ?? ''
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  const [enabled, setEnabled] = useState(true)
+  const [checking, setChecking] = useState(false)
+  const [updates, setUpdates] = useState<FirmwareUpdateEntry[] | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    fetch('/api/firmware-check', { headers }).then(r => r.json())
+      .then(j => setEnabled(j.enabled ?? true)).catch(() => {})
+  }, [])
+
+  async function toggle(v: boolean) {
+    setEnabled(v)
+    try { await fetch('/api/firmware-check', { method: 'POST', headers, body: JSON.stringify({ enabled: v }) }) }
+    catch { /* ignore */ }
+  }
+
+  async function checkNow() {
+    setChecking(true); setError(''); setUpdates(null)
+    try {
+      const r = await fetch('/api/firmware-check/run', { method: 'POST', headers })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.detail || 'Check failed')
+      setUpdates(j.updates ?? [])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Check failed')
+    } finally { setChecking(false) }
+  }
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide">Firmware Updates</h2>
+        <button onClick={() => toggle(!enabled)}
+          className={`relative inline-flex w-11 h-6 rounded-full transition-colors shrink-0 ${enabled ? 'bg-amber-500' : 'bg-gray-700'}`}>
+          <span className={`inline-block w-4 h-4 bg-white rounded-full shadow transform transition-transform mt-1 ${enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+        </button>
+      </div>
+      <p className="text-xs text-gray-500 leading-relaxed">
+        Checks GoodWe's cloud daily for newer ARM/DSP firmware (same check the SolarGo app
+        does — no login needed). Sends a Telegram alert when something new appears. This
+        only checks and notifies — applying an update is a manual step via SolarGo/SEMS.
+      </p>
+
+      <button onClick={checkNow} disabled={checking}
+        className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white text-sm px-4 py-2 rounded-lg transition-colors border border-gray-700">
+        {checking ? <RefreshCw size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+        Check now
+      </button>
+
+      {error && <div className="text-sm text-red-400">{error}</div>}
+
+      {updates && updates.length === 0 && (
+        <div className="text-sm text-emerald-400">Up to date — no newer firmware found.</div>
+      )}
+      {updates && updates.length > 0 && (
+        <div className="space-y-2">
+          {updates.map((u, i) => (
+            <div key={i} className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm">
+              <div className="text-white font-medium">{u.type_name}: {u.current} → {u.available}</div>
+              {u.released && <div className="text-xs text-gray-500 mt-0.5">Released {u.released}</div>}
+              <div className="text-xs text-gray-500 mt-1 break-all">{u.url}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SystemSettings() {
   const token   = localStorage.getItem('gw_token') ?? ''
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
@@ -805,6 +879,7 @@ function SystemSettings() {
 
       <ConnectionSettings />
       <InverterVersion />
+      <FirmwareUpdateCheck />
 
       {/* Version */}
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">

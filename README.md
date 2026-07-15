@@ -71,6 +71,13 @@ Emulate Self-Use mode (missing on the ES series) and any custom behaviour:
 - Hourly chart with "Now" marker, plus **forecast-vs-actual accuracy** tracking
   with an average-bias hint to tune your kWp/tilt/azimuth over time
 
+### Firmware update check
+Settings → System — checks GoodWe's cloud daily for newer ARM/DSP firmware,
+reusing the exact (no-login-required) mechanism the SolarGo app itself uses,
+and sends a Telegram alert when something new appears. Check-only — applying
+an update is a manual step via SolarGo/SEMS (see "Inverter firmware updates"
+below). A "Check now" button runs it on demand from the Settings page.
+
 ### Telegram — notifications + interactive bot
 - **Alerts:** battery critical / low / full, fault codes, grid outage, daily summary (all configurable)
 - **Interactive bot** (long-poll, only the configured chat may control):

@@ -303,6 +303,12 @@ async def lifespan(_app: FastAPI):
         db=db,
     ))
     db.repair_forecast_actuals()
+    import firmware_check
+    asyncio.create_task(firmware_check.run_loop(
+        get_inverter=lambda: inverter,
+        get_notify_config=load_notification_config,
+        send_telegram_fn=send_telegram,
+    ))
     asyncio.create_task(forecast_logger())
     asyncio.create_task(battery_forecast_scheduler())
     asyncio.create_task(dev_engine.poll_devices_loop())
@@ -413,6 +419,34 @@ async def set_battery_schedule(body: dict, _: str = Depends(require_auth)):
             setattr(s, k, v)
     save_schedule(s)
     return {"ok": True}
+
+@app.get("/api/firmware-check")
+async def get_firmware_check(_: str = Depends(require_auth)):
+    import firmware_check
+    return asdict(firmware_check.load_state())
+
+@app.post("/api/firmware-check")
+async def set_firmware_check(body: dict, _: str = Depends(require_auth)):
+    import firmware_check
+    s = firmware_check.load_state()
+    if "enabled" in body:
+        s.enabled = bool(body["enabled"])
+    firmware_check.save_state(s)
+    return {"ok": True}
+
+@app.post("/api/firmware-check/run")
+async def run_firmware_check(_: str = Depends(require_auth)):
+    """Manual 'check now' — does not wait for the daily loop."""
+    import firmware_check
+    if inverter is None:
+        raise HTTPException(503, "Inverter not connected")
+    sn  = getattr(inverter, "serial_number", None)
+    arm = getattr(inverter, "arm_version", None)
+    dsp = getattr(inverter, "dsp1_version", None)
+    if not sn or arm is None or dsp is None:
+        raise HTTPException(503, "Inverter version info not available yet")
+    updates = await firmware_check.check_available_updates(sn, arm, dsp)
+    return {"current": {"arm": arm, "dsp": dsp}, "updates": updates}
 
 @app.get("/api/system-config")
 async def get_system_config(_: str = Depends(require_auth)):

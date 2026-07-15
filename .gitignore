@@ -1,10 +1,15 @@
+# ── Downloaded inverter firmware (proprietary GoodWe binaries -- never publish) ──
+/updates/
+
 # ── Android APK / decompiled files (not part of the app) ─────────────────────
 *.apk
 *.xapk
 apk_assets/
 apk_extracted/
 android/extracted/
+android/extracted_*/
 android/decompiled/
+android/decompiled_*/
 
 # ── Frontend build artifacts ──────────────────────────────────────────────────
 frontend/node_modules/
