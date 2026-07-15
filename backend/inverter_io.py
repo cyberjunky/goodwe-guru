@@ -23,6 +23,7 @@ if a genuine fix exists it's likely GoodWe-app-only, same precedent as
 backup_supply (see CLAUDE.md).
 """
 
+import asyncio
 import logging
 
 from goodwe import OperationMode
@@ -38,12 +39,28 @@ _OPMODE = {
     5: OperationMode.SELF_USE,
 }
 
+# Serializes ALL inverter I/O across the app (main poll loop, battery
+# scheduler, automations, Telegram bot, Settings API, reconnects). The AA55/
+# UDP stack on the ES is a small embedded implementation with no real
+# concurrent-session handling — two coroutines hitting it at once (e.g. the
+# battery scheduler's write+verify-read cycle overlapping the main poll's
+# read_runtime_data(), both plausible within the same ~20s window) can each
+# get a garbled/missing response. Every direct inverter call in the backend
+# MUST be wrapped in `async with inverter_lock:` — apply_setting() below does
+# this for all writes; main.py wraps its own direct reads the same way.
+inverter_lock = asyncio.Lock()
+
 
 async def apply_setting(inverter, key: str, value) -> str:
     """Write one setting via the best available method. Returns a short description."""
     if inverter is None:
         raise RuntimeError("Inverter not connected")
 
+    async with inverter_lock:
+        return await _apply_setting_locked(inverter, key, value)
+
+
+async def _apply_setting_locked(inverter, key: str, value) -> str:
     if key == "work_mode":
         mode = _OPMODE.get(int(value))
         if mode is None:

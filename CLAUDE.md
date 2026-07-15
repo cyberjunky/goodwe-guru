@@ -18,6 +18,15 @@ Key platform constraints — always keep these in mind:
   `backend/inverter_io.apply_setting()`, which maps: `work_mode`→`set_operation_mode`,
   `dod`→`set_ongrid_battery_dod`, `grid_export_limit`→`set_grid_export_limit`.
 - ES uses AA55 protocol (not Modbus TCP); reads occasionally time out — retry.
+- **All inverter I/O is serialized through `inverter_io.inverter_lock`** (an
+  `asyncio.Lock`). The AA55/UDP stack is a small embedded implementation with
+  no real concurrent-session handling — two coroutines hitting it at once
+  (e.g. the battery scheduler's write+verify-read cycle, which can run ~20s,
+  overlapping the main poll's 20s read cycle) can each get a garbled/missing
+  response, contributing to "inverter went offline" symptoms. `apply_setting()`
+  acquires the lock internally for all writes; any NEW direct read (
+  `read_runtime_data`/`read_settings_data`/`goodwe.connect`) MUST be wrapped
+  in `async with inverter_lock:` too — don't add a bare inverter call anywhere.
 - ES field names differ from ET: home load → normalised to `load_ptotal` in `backend/normalise()`,
   preferring `house_consumption` (PV+grid+bat, balances the flow diagram) over `plant_power` (inverter AC output).
 - ES grid power sign is inverted vs the frontend (import>0/export<0); `normalise()` fixes it via `grid_in_out_label`.

@@ -54,10 +54,12 @@ db: Database   # initialised inside lifespan, not at import time
 # ─────────────────────────────────────────────────────────────────────────────
 async def connect_inverter():
     global inverter
+    from inverter_io import inverter_lock
     while True:
         try:
             log.info("Connecting to inverter at %s …", cfg.inverter_host)
-            inverter = await goodwe.connect(cfg.inverter_host)
+            async with inverter_lock:
+                inverter = await goodwe.connect(cfg.inverter_host)
             log.info("Connected: %s %s", inverter.model_name, inverter.serial_number)
             return
         except Exception as e:
@@ -127,12 +129,14 @@ def normalise(data: dict) -> dict:
 
 async def poll_inverter():
     global latest_data
+    from inverter_io import inverter_lock
     await connect_inverter()
     await asyncio.sleep(3)
     consecutive_errors = 0
     while True:
         try:
-            raw  = await inverter.read_runtime_data()
+            async with inverter_lock:
+                raw = await inverter.read_runtime_data()
             data = {str(k): (v.value if hasattr(v, "value") else v) for k, v in raw.items()}
             data = normalise(data)
             data.update(bms_data)
@@ -208,13 +212,14 @@ async def _apply_dod_verified(target: int, tries: int = 3) -> bool:
     """Write DoD and confirm it stuck (AA55 writes are occasionally lost).
     Returns True if confirmed OR unverifiable (read timed out → assume applied);
     False only if a successful read shows the wrong value (so we retry next cycle)."""
-    from inverter_io import apply_setting
+    from inverter_io import apply_setting, inverter_lock
     last_read = None
     for _ in range(tries):
         await apply_setting(inverter, "dod", target)
         await asyncio.sleep(3)
         try:
-            d = await inverter.read_settings_data()
+            async with inverter_lock:
+                d = await inverter.read_settings_data()
             v = d.get("dod"); last_read = int(getattr(v, "value", v))
             if last_read == target:
                 return True
@@ -348,7 +353,9 @@ async def get_settings(_: str = Depends(require_auth)):
     if inverter is None:
         return {}
     try:
-        raw = await inverter.read_settings_data()
+        from inverter_io import inverter_lock
+        async with inverter_lock:
+            raw = await inverter.read_settings_data()
         return {str(k): (v.value if hasattr(v, "value") else v) for k, v in raw.items()}
     except Exception as e:
         log.error("read_settings_data: %s", e)
