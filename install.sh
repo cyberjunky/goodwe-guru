@@ -141,11 +141,16 @@ if $ON_PROXMOX; then
     --start 1 \
     --description "GoodWe Guru — solar dashboard"
 
-  # Harden LXC: drop all Linux capabilities except what's needed
-  # (no cap_net_admin, no cap_sys_admin, no cap_dac_override, etc.)
+  # Harden LXC: drop unneeded Linux capabilities.
+  # net_admin is NOT dropped: the container manages its own eth0 (ifupdown/dhclient
+  # need it to bring the interface up and request a DHCP lease). Dropping it doesn't
+  # break the container immediately — `pct create --start 1` boots it before this
+  # config is written, so the first boot still has full capabilities — but the next
+  # stop/start picks up the dropped capability and eth0 can no longer be configured,
+  # leaving the container with no network (confirmed 2026-07-20).
   cat >> "/etc/pve/lxc/${VMID}.conf" <<EOF
 # Security hardening
-lxc.cap.drop = sys_module mac_admin mac_override sys_time net_admin sys_rawio
+lxc.cap.drop = sys_module mac_admin mac_override sys_time sys_rawio
 lxc.apparmor.profile = unconfined
 EOF
 
