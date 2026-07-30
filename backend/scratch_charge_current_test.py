@@ -50,8 +50,8 @@ WHAT TO WATCH AFTER `test` (only meaningful while PV is producing surplus):
 
 SAFETY: charge current 0 is a normal user-settable value in the SolarGo app
 (UI range 0-100 A), and the voltage is re-sent unchanged. Reversible via
-`revert`. Do not run `test` twice without `revert` in between (the backup
-file would then store 0 as the "original").
+`revert`. Running `test` twice in a row is safe: the backup of the original
+current is never overwritten with 0.
 """
 
 import asyncio
@@ -109,10 +109,20 @@ async def main():
         v2, i2 = await read_params(inverter)
         print(f"AFTER: charge_v raw = {v2}, charge_i raw = {i2}")
         if i2 == 0 and v2 == v_raw:
-            with open(BACKUP_FILE, "w") as f:
-                json.dump({"charge_v_raw": v_raw, "charge_i_raw": i_raw}, f)
-            print(f"\nWrite CONFIRMED via read-back. Original charge_i ({i_raw}) "
-                  f"saved to {os.path.basename(BACKUP_FILE)}.")
+            # Never save 0 as the "original" — that happens when test is run
+            # twice in a row and would make revert restore 0 (observed live).
+            if i_raw != 0:
+                with open(BACKUP_FILE, "w") as f:
+                    json.dump({"charge_v_raw": v_raw, "charge_i_raw": i_raw}, f)
+                print(f"\nWrite CONFIRMED via read-back. Original charge_i ({i_raw}) "
+                      f"saved to {os.path.basename(BACKUP_FILE)}.")
+            elif os.path.exists(BACKUP_FILE):
+                print(f"\nWrite CONFIRMED via read-back. Current was already 0; "
+                      f"keeping the existing backup in {os.path.basename(BACKUP_FILE)}.")
+            else:
+                print("\nWrite CONFIRMED via read-back. NOTE: current was already 0 "
+                      "and no backup exists — revert has nothing to restore; set the "
+                      "desired current manually.")
             print("Watch the dashboard: does battery power drop to ~0 W and SoC stop climbing?")
             print("When done observing, run revert.")
         else:
