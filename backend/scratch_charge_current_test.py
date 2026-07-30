@@ -40,6 +40,7 @@ Usage (on the CT):
   ../.venv/bin/python3 scratch_charge_current_test.py read
   ../.venv/bin/python3 scratch_charge_current_test.py test
   ../.venv/bin/python3 scratch_charge_current_test.py revert
+  ../.venv/bin/python3 scratch_charge_current_test.py set 186   # raw = A x 10
 
 WHAT TO WATCH AFTER `test` (only meaningful while PV is producing surplus):
   - Battery power (pbattery1) drops to ~0 W and SoC stops climbing
@@ -85,7 +86,7 @@ async def send_charge_params(inverter, charge_v_raw: int, charge_i_raw: int):
 
 async def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
-    if mode not in ("read", "test", "revert"):
+    if mode not in ("read", "test", "revert", "set") or (mode == "set" and len(sys.argv) < 3):
         print(__doc__)
         return
 
@@ -100,6 +101,20 @@ async def main():
 
     if mode == "read":
         print("\nRead-only. No changes made.")
+        return
+
+    if mode == "set":
+        target = int(sys.argv[2])
+        print(f"\nWriting 0x0351: charge_v = {v_raw} (unchanged), charge_i = {target} ...")
+        await send_charge_params(inverter, v_raw, target)
+        await asyncio.sleep(2)
+        v2, i2 = await read_params(inverter)
+        print(f"AFTER: charge_v raw = {v2}, charge_i raw = {i2}")
+        if i2 == target:
+            print("Write accepted as-is.")
+        else:
+            print(f"Inverter/BMS adjusted the value {target} -> {i2} "
+                  "(clamped to the currently-allowed ceiling).")
         return
 
     if mode == "test":
