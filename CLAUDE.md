@@ -48,16 +48,38 @@ battery while the current hour's solar forecast ≥ a threshold, discharges belo
 — ~2 writes/day, flash-safe. (Inverter NVM has limited write endurance: never write
 settings on a tight loop.)
 
-**There is no charge-SoC cap on ES, and none of this app's writes can create one.**
-General mode charges the battery to 100% with any excess solar — confirmed by
-exhausting every candidate: the `ECO_CHARGE` eco-mode SoC target is ignored by
-EcoModeV1 firmware (ARM fw < 14), an eco 0%-power "park" schedule stops grid
-charging but not PV-surplus charging, and a generic `write_setting("charge_i", 0)`
-BMS current-limit write is accepted but has zero effect (same silently-ignored-
-generic-write class as `work_mode`/`dod` before their dedicated methods were
-found — except here there IS no dedicated method). Do not reintroduce any of
-these as a "fix" — see git history 2026-07-09/10 for the full trail. If a real
-fix exists it's likely GoodWe-app-only, same precedent as `backup_supply`.
+**2026-07-21: GoodWe pushed a `BatBMSCurrLmtCoff` = 80% setting cloud-side**
+(visible in SolarGo/SEMS, not written by this app) on ARM 22 / DSP 26 —
+plausibly a BMS current-limit cutoff tied to SoC, which may finally act as
+the max-charge cap the owner wants. **Not yet behaviorally confirmed** —
+watch a full sunny day and see whether SoC actually plateaus near 80% or
+keeps climbing to 100% as before. See memory `goodwe-eco-mode-writes` for
+what to check if it turns out to be another silently-ignored write. Do NOT
+reintroduce an app-side workaround unless this is confirmed to still fail —
+prior attempts (`ECO_CHARGE` eco-mode SoC target, an eco 0%-power "park"
+schedule, a generic `write_setting("charge_i", 0)` BMS current-limit write)
+were all exhausted and abandoned as dead ends on earlier firmware; see git
+history 2026-07-09/10 and 2026-07-15 for that trail.
+
+**2026-07-30: `BatBMSCurrLmtCoff` decoded — it's a CURRENT limit, not a SoC cap.**
+The name = Battery BMS Current-Limit Coefficient (80 = charge current throttled
+to 80% of the BMS maximum). It does not exist anywhere in the SolarGo APK
+sources (cloud-portal service parameter only) and does NOT stop charging at
+80% SoC — confirmed by the owner: SoC still climbs to 100%. Meanwhile a new,
+never-tested local lead was found in the decompiled app: the dedicated AA55
+command **0x0351 "set battery charge parameters"** (charge-V + charge-I
+together; `DataCollectUtil.java` case 105, `SET_BATTERY_CHARGE_PAREMETERS_REQUEST_CODE`).
+The failed 2026-07-09 attempt used the generic `write_setting("charge_i")`
+register-offset write — the known silently-ignored class; the app's dedicated
+command is the same precedent as `set_ongrid_battery_dod` (0x0560) which DOES
+work. Frame is byte-identical to the library's
+`Aa55ProtocolCommand(f"035104{v:04x}{i:04x}", "03d1")` (verified vs app:
+AA 55 C0 7F 03 51 04 V I sum). Supervised test script:
+`backend/scratch_charge_current_test.py` (read/test/revert, read-back
+verified). If charge_i=0 actually stops PV charging, the 80% handbrake =
+scheduler writes charge_i 0 at SoC≥80, restores at ≤75 (hysteresis, ≤2
+writes/day, flash-safe). The 0xB9B9/0xB9BA "Force Charge / SoC upper limit"
+registers are a boost-to-target feature, confirmed NOT a cap (git 8df99ee9).
 
 What the scheduler's `max_soc` field actually does: it's a release threshold,
 not a cap. While producing and SoC is below it, the battery is held (DoD 0, no
