@@ -48,6 +48,16 @@ battery while the current hour's solar forecast ≥ a threshold, discharges belo
 — ~2 writes/day, flash-safe. (Inverter NVM has limited write endurance: never write
 settings on a tight loop.)
 
+Battery CHARGE capping IS possible (since 2026-07-30): the scheduler's
+**charge cap** (`charge_cap_soc`, Battery page → "Stop charging at") brakes ALL
+charging by writing charge current 0 via the dedicated AA55 command **0x0351**
+(routed as `charge_i` in `inverter_io.apply_setting`) once SoC reaches the cap,
+and releases at cap−5. ≤2 writes/day. Every `charge_cap_full_every_days` (14)
+the cap pauses for a 100% BMS-balancing charge. Deliberately gentle on the
+fragile AA55/WiFi stack: triggering uses only already-polled data, one write
+attempt per 5-min cycle, failed writes retry next cycle — never a tight retry
+loop (the WiFi module crashes under rapid retries).
+
 **2026-07-21: GoodWe pushed a `BatBMSCurrLmtCoff` = 80% setting cloud-side**
 (visible in SolarGo/SEMS, not written by this app) on ARM 22 / DSP 26 —
 plausibly a BMS current-limit cutoff tied to SoC, which may finally act as
@@ -61,35 +71,35 @@ schedule, a generic `write_setting("charge_i", 0)` BMS current-limit write)
 were all exhausted and abandoned as dead ends on earlier firmware; see git
 history 2026-07-09/10 and 2026-07-15 for that trail.
 
-**2026-07-30: `BatBMSCurrLmtCoff` decoded — it's a CURRENT limit, not a SoC cap.**
-The name = Battery BMS Current-Limit Coefficient (80 = charge current throttled
-to 80% of the BMS maximum). It does not exist anywhere in the SolarGo APK
-sources (cloud-portal service parameter only) and does NOT stop charging at
-80% SoC — confirmed by the owner: SoC still climbs to 100%. Meanwhile a new,
-never-tested local lead was found in the decompiled app: the dedicated AA55
-command **0x0351 "set battery charge parameters"** (charge-V + charge-I
-together; `DataCollectUtil.java` case 105, `SET_BATTERY_CHARGE_PAREMETERS_REQUEST_CODE`).
+**2026-07-30: charge-cap handbrake FOUND and confirmed working.** GoodWe's
+cloud-side `BatBMSCurrLmtCoff` = 80 is a BMS charge-CURRENT coefficient (a
+throttle, not a SoC cap) — SoC still climbed to 100%. The working mechanism
+is the dedicated AA55 command **0x0351 "set battery charge parameters"**
+(charge-V + charge-I together; from decompiled `DataCollectUtil.java` case
+105), sent as `Aa55ProtocolCommand(f"035104{v_x10:04x}{i_raw:04x}", "03d1")`.
 The failed 2026-07-09 attempt used the generic `write_setting("charge_i")`
-register-offset write — the known silently-ignored class; the app's dedicated
-command is the same precedent as `set_ongrid_battery_dod` (0x0560) which DOES
-work. Frame is byte-identical to the library's
-`Aa55ProtocolCommand(f"035104{v:04x}{i:04x}", "03d1")` (verified vs app:
-AA 55 C0 7F 03 51 04 V I sum). Supervised test script:
-`backend/scratch_charge_current_test.py` (read/test/revert, read-back
-verified). If charge_i=0 actually stops PV charging, the 80% handbrake =
-scheduler writes charge_i 0 at SoC≥80, restores at ≤75 (hysteresis, ≤2
-writes/day, flash-safe). The 0xB9B9/0xB9BA "Force Charge / SoC upper limit"
-registers are a boost-to-target feature, confirmed NOT a cap (git 8df99ee9).
+register-offset write — the known silently-ignored class; the dedicated
+command works, same precedent as `set_ongrid_battery_dod` (0x0560).
+**Live-tested on the owner's GW3648D-ES: charge_i=0 stops PV charging
+immediately (surplus exports instead); restoring the original value resumes
+charging.** Wire units: charge_v = V×10 (53.0 V → 530), charge_i = A×10
+(18.6 A → 186). The command writes both, so always re-send the voltage just
+read. Read-back of charge_i drifts (BMS-negotiated: 186→49→13 observed) —
+normal, don't treat a mismatched read-back as failure. Standalone test
+script: `backend/scratch_charge_current_test.py` (read/test/revert/set).
+The 0xB9B9/0xB9BA "Force Charge / SoC upper limit" registers are a
+boost-to-target feature, confirmed NOT a cap (git 8df99ee9).
+**Integrated the same day** as the scheduler charge cap (see above).
 
-What the scheduler's `max_soc` field actually does: it's a release threshold,
-not a cap. While producing and SoC is below it, the battery is held (DoD 0, no
-discharge); once SoC reaches it, the hold releases (DoD 80) so the battery can
-discharge as soon as load exceeds production, instead of being locked at a high
-SoC for hours with no way down. It cannot stop the SoC peak itself, only the
-prolonged dwell time at that peak. The "producing" check uses live PV (`ppv`)
-alongside the forecast so a wrong/missing forecast can't flip settings, and a
-failed forecast fetch is never cached (a poisoned empty cache once released the
-hold at midday).
+What the scheduler's `max_soc` field actually does: it's a discharge-hold
+release threshold, distinct from the charge cap (`charge_cap_soc`). While
+producing and SoC is below it, the battery is held (DoD 0, no discharge);
+once SoC reaches it, the hold releases (DoD 80) so the battery can discharge
+as soon as load exceeds production, instead of being locked at a high SoC
+for hours with no way down. The "producing" check uses live PV (`ppv`)
+alongside the forecast so a wrong/missing forecast can't flip settings, and
+a failed forecast fetch is never cached (a poisoned empty cache once
+released the hold at midday).
 
 ## Firmware update check (`firmware_check.py`)
 

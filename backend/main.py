@@ -229,23 +229,82 @@ async def _apply_dod_verified(target: int, tries: int = 3) -> bool:
     return last_read is None
 
 
+async def _charge_cap_tick(sch) -> None:
+    """SoC charge cap via the 0x0351 charge-current brake (see inverter_io.py).
+
+    Deliberately gentle on the fragile AA55/WiFi stack: triggering uses only
+    the already-polled latest_data, and at most ONE write is attempted per
+    5-min cycle (on transitions only — ≤2/day in steady state). A failed
+    write leaves the state untouched, so it is simply retried next cycle;
+    never retry in a tight loop — the inverter's WiFi module crashes under
+    rapid retries.
+    """
+    from datetime import date
+    from battery_schedule import save_schedule
+    from inverter_io import apply_setting
+
+    cap = int(getattr(sch, "charge_cap_soc", 0) or 0)
+    braked = bool(getattr(sch, "charge_cap_active", False))
+    release_current = int(getattr(sch, "charge_cap_release_current", 186) or 186)
+    soc = float(latest_data.get("battery_soc") or 0)
+    if soc <= 0:
+        return   # no valid SoC yet — don't act blind
+
+    if not (10 <= cap < 100):
+        if braked:
+            # Cap switched off while braked — release so charging isn't stuck off.
+            await apply_setting(inverter, "charge_i", release_current)
+            sch.charge_cap_active = False
+            save_schedule(sch)
+            log.info("Charge cap disabled while braked — released (charge_i → %d)", release_current)
+        return
+
+    # BMS maintenance: LFP needs a periodic 100% charge for top-balancing /
+    # SoC recalibration — skip the cap when one is due, record when done.
+    interval = int(getattr(sch, "charge_cap_full_every_days", 0) or 0)
+    today = date.today().isoformat()
+    try:
+        last_full = date.fromisoformat(sch.charge_cap_last_full) if sch.charge_cap_last_full else None
+    except ValueError:
+        last_full = None
+    balance_due = (interval > 0 and last_full != date.today()
+                   and (last_full is None or (date.today() - last_full).days >= interval))
+    if balance_due:
+        if braked:
+            await apply_setting(inverter, "charge_i", release_current)
+            sch.charge_cap_active = False
+            save_schedule(sch)
+            log.info("Charge cap: BMS-balancing day — released for a full charge")
+        if soc >= 99:
+            sch.charge_cap_last_full = today
+            save_schedule(sch)
+            log.info("Charge cap: 100%% reached — BMS balance done, cap resumes")
+        return
+
+    if not braked and soc >= cap:
+        await apply_setting(inverter, "charge_i", 0)
+        sch.charge_cap_active = True
+        save_schedule(sch)
+        log.info("Charge cap: SoC %.0f%% ≥ %d%% — charging braked", soc, cap)
+    elif braked and soc <= cap - 5:
+        await apply_setting(inverter, "charge_i", release_current)
+        sch.charge_cap_active = False
+        save_schedule(sch)
+        log.info("Charge cap: SoC %.0f%% ≤ %d%% — charging released", soc, cap - 5)
+
+
 async def battery_forecast_scheduler():
     """
-    DoD-only battery schedule. IMPORTANT: there is no software charge cap on
-    this ES — the goodwe library has no dedicated method for battery charge
-    current / max charge SoC (only set_ongrid_battery_dod for the discharge
-    floor), and every generic-write attempt at one (eco-mode SoC target,
-    charge_i, an eco 0%-power "park") was confirmed silently ignored by the
-    inverter (see git history around 2026-07-09/10 and CLAUDE.md). PV surplus
-    charges the battery to 100% on a sunny day regardless of anything this
-    app writes.
+    Two independent duties, both checked every 5 min:
 
-    What this DOES do: hold the battery (DoD 0, no discharge) only while
-    producing AND below the release threshold (`max_soc`). Once SoC reaches
-    that threshold, the hold is released (DoD -> night_dod) so the battery
-    can discharge the moment load exceeds production, instead of being
-    locked at 100% with no way down for hours. This can't prevent the peak,
-    only stop making the dwell time at that peak worse.
+    1. Forecast hold (sch.enabled): hold the battery (DoD 0, no discharge)
+       while producing AND below the release threshold (`max_soc`). Once SoC
+       reaches that threshold, the hold is released (DoD -> night_dod) so the
+       battery can discharge the moment load exceeds production.
+
+    2. Charge cap (sch.charge_cap_soc): brakes ALL charging once SoC reaches
+       the cap (see _charge_cap_tick) — the actual 80% cap the owner wants,
+       possible since the 0x0351 command was confirmed working (2026-07-30).
     """
     from battery_schedule import load_schedule
     from forecast import current_hour_kwh
@@ -254,28 +313,32 @@ async def battery_forecast_scheduler():
     while True:
         try:
             sch = load_schedule()
-            if sch.enabled and inverter is not None:
-                data = await fetch_forecast(load_forecast_config())   # cached (30 min)
-                if not data.get("watts"):
-                    # No forecast at all (fetch failed, nothing cached) — don't
-                    # guess: keep the current DoD and retry next cycle.
-                    log.warning("Battery forecast schedule: no forecast data — keeping DoD as-is")
+            if inverter is not None:
+                if sch.enabled:
+                    data = await fetch_forecast(load_forecast_config())   # cached (30 min)
+                    if not data.get("watts"):
+                        # No forecast at all (fetch failed, nothing cached) — don't
+                        # guess: keep the current DoD and retry next cycle.
+                        log.warning("Battery forecast schedule: no forecast data — keeping DoD as-is")
+                    else:
+                        kwh = current_hour_kwh(data)
+                        # Live PV is a network-independent sanity check: if the
+                        # panels are producing ≥ threshold right now, it's daytime
+                        # regardless of what the forecast claims.
+                        live_kw = float(latest_data.get("ppv") or 0) / 1000.0
+                        producing = max(kwh, live_kw) >= float(sch.threshold_kwh)
+                        soc = float(latest_data.get("battery_soc") or 0)
+                        release_at = int(getattr(sch, "max_soc", 100) or 100)
+                        held = producing and (release_at >= 100 or soc < release_at)
+                        desired = int(sch.day_dod if held else sch.night_dod)
+                        if desired != last_dod:
+                            ok = await _apply_dod_verified(desired)
+                            last_dod = desired if ok else None   # not confirmed → retry next cycle
+                            log.info("Battery forecast schedule: hour=%.2f kWh live=%.2f kW soc=%.0f%% held=%s DoD→%d (%s)",
+                                     kwh, live_kw, soc, held, desired, "ok" if ok else "unconfirmed, retrying")
                 else:
-                    kwh = current_hour_kwh(data)
-                    # Live PV is a network-independent sanity check: if the
-                    # panels are producing ≥ threshold right now, it's daytime
-                    # regardless of what the forecast claims.
-                    live_kw = float(latest_data.get("ppv") or 0) / 1000.0
-                    producing = max(kwh, live_kw) >= float(sch.threshold_kwh)
-                    soc = float(latest_data.get("battery_soc") or 0)
-                    release_at = int(getattr(sch, "max_soc", 100) or 100)
-                    held = producing and (release_at >= 100 or soc < release_at)
-                    desired = int(sch.day_dod if held else sch.night_dod)
-                    if desired != last_dod:
-                        ok = await _apply_dod_verified(desired)
-                        last_dod = desired if ok else None   # not confirmed → retry next cycle
-                        log.info("Battery forecast schedule: hour=%.2f kWh live=%.2f kW soc=%.0f%% held=%s DoD→%d (%s)",
-                                 kwh, live_kw, soc, held, desired, "ok" if ok else "unconfirmed, retrying")
+                    last_dod = None
+                await _charge_cap_tick(sch)
             else:
                 last_dod = None
         except Exception as e:

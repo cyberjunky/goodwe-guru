@@ -12,15 +12,19 @@ Confirmed on ES (platform 105):
   - set_ongrid_battery_dod(dod)            depth-of-discharge floor (0 = no discharge)
   - set_grid_export_limit(watts)
 
-NOTE: there is no dedicated method (and no working generic write) to cap
-battery CHARGE SoC on this ES. Tried and confirmed non-functional: the
+Capping battery CHARGE was long believed impossible on this ES — the
 ECO_CHARGE eco_mode_soc target (ignored by EcoModeV1 firmware), an eco
 0%-power "park" schedule (stops grid charging, not PV-surplus charging),
-and a generic write_setting("charge_i", 0) BMS current limit (accepted,
-zero effect — same class of silently-ignored generic write as work_mode/dod
-before their dedicated methods were found). Don't reintroduce any of these;
-if a genuine fix exists it's likely GoodWe-app-only, same precedent as
-backup_supply (see CLAUDE.md).
+and a generic write_setting("charge_i", 0) register write (silently
+ignored) all failed. What DOES work (confirmed live 2026-07-30 on the
+owner's GW3648D-ES) is the dedicated AA55 command 0x0351 "set battery
+charge parameters", reverse-engineered from the SolarGo app — same
+precedent as set_ongrid_battery_dod (0x0560): the dedicated command
+works, the generic register write doesn't. Routed below as "charge_i"
+(0 = brake, stops ALL charging incl. PV surplus). Read-back of the
+register may differ from the written value (BMS-negotiated, drifts on
+its own) — that's normal; a clean command ack means success. See
+CLAUDE.md 2026-07-30.
 """
 
 import asyncio
@@ -87,6 +91,21 @@ async def _apply_setting_locked(inverter, key: str, value) -> str:
     if key == "dod":
         await inverter.set_ongrid_battery_dod(int(value))
         return f"on-grid DoD → {int(value)}%"
+
+    if key == "charge_i":
+        # Dedicated AA55 0x0351 "set battery charge parameters" — the only
+        # write path that actually works on ES (see module docstring). Value
+        # is raw, in 0.1 A units (186 = 18.6 A); 0 brakes all charging.
+        # The command also carries the charge voltage, so re-send the
+        # voltage just read, unchanged.
+        from goodwe.protocol import Aa55ProtocolCommand
+        current_raw = max(0, int(value))
+        s = await inverter.read_settings_data()
+        v = s.get("charge_v")
+        v_raw = int(round(float(getattr(v, "value", v)) * 10))
+        await inverter._read_from_socket(
+            Aa55ProtocolCommand(f"035104{v_raw:04x}{current_raw:04x}", "03d1"))
+        return f"charge current → {current_raw / 10:.1f} A"
 
     if key == "grid_export_limit":
         await inverter.set_grid_export_limit(int(value))

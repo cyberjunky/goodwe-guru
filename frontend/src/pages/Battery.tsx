@@ -9,7 +9,7 @@ function DischargeControl() {
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
   const [dod, setDod] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
-  const [sched, setSched] = useState<{ enabled: boolean; threshold_kwh: number; max_soc?: number; hour_forecast_kwh?: number; producing?: boolean } | null>(null)
+  const [sched, setSched] = useState<{ enabled: boolean; threshold_kwh: number; max_soc?: number; charge_cap_soc?: number; charge_cap_active?: boolean; charge_cap_full_every_days?: number; hour_forecast_kwh?: number; producing?: boolean } | null>(null)
 
   async function refresh() {
     try {
@@ -41,6 +41,14 @@ function DischargeControl() {
     v = Math.max(50, Math.min(Math.round(v), 100))
     setSched(s => s ? { ...s, max_soc: v } : s)
     try { await fetch('/api/battery-schedule', { method: 'POST', headers, body: JSON.stringify({ max_soc: v }) }) }
+    catch { /* ignore */ }
+    refresh()
+  }
+  async function setChargeCap(v: number) {
+    if (isNaN(v)) return
+    v = v <= 0 ? 0 : Math.max(50, Math.min(Math.round(v), 95))
+    setSched(s => s ? { ...s, charge_cap_soc: v } : s)
+    try { await fetch('/api/battery-schedule', { method: 'POST', headers, body: JSON.stringify({ charge_cap_soc: v }) }) }
     catch { /* ignore */ }
     refresh()
   }
@@ -116,7 +124,20 @@ function DischargeControl() {
             className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-right text-white" />
           <span>% SoC</span>
           <span className="ml-auto text-gray-500">
-            not a charge cap — this ES can't stop PV charging past it; only stops the discharge hold once reached
+            releases the discharge hold once reached — the cap below is what stops charging
+          </span>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-gray-400">
+          <span><BatteryCharging size={12} className="inline mr-1" />Stop charging at</span>
+          <input type="number" step="1" min="0" max="95" defaultValue={sched?.charge_cap_soc ?? 0}
+            onBlur={e => setChargeCap(parseFloat(e.target.value))}
+            className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-right text-white" />
+          <span>% SoC (0 = off)</span>
+          <span className="ml-auto text-gray-500">
+            {sched?.charge_cap_soc
+              ? <>brakes charging at the cap, releases at {sched.charge_cap_soc - 5}% — surplus exports instead
+                  {sched.charge_cap_active && <b className="text-amber-400"> · brake active</b>}</>
+              : 'off — battery charges to 100%'}
           </span>
         </div>
       </div>
