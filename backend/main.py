@@ -3,7 +3,6 @@ GoodWe Monitor — FastAPI backend
 Inverter comms via goodwe library (Modbus/UDP).
 WebSocket live stream, SQLite history, JWT auth.
 Costs/tariffs, solar forecast, Telegram notifications.
-BeagleBone RS485/CAN BMS bridge via /ws/bms.
 """
 
 import asyncio
@@ -43,7 +42,6 @@ log = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 inverter: goodwe.Inverter | None = None
 latest_data: dict        = {}
-bms_data: dict           = {}
 ws_clients: set[WebSocket] = set()
 
 db: Database   # initialised inside lifespan, not at import time
@@ -139,7 +137,6 @@ async def poll_inverter():
                 raw = await inverter.read_runtime_data()
             data = {str(k): (v.value if hasattr(v, "value") else v) for k, v in raw.items()}
             data = normalise(data)
-            data.update(bms_data)
             try:
                 data["device_tracked_w"] = dev_engine.get_tracked_power()["total_w"]
             except Exception:
@@ -208,25 +205,109 @@ async def forecast_logger():
 # Forecast-driven battery hold — hold while this hour's solar forecast is above
 # a threshold, discharge when below. Re-checks the cached forecast every 5 min.
 # ─────────────────────────────────────────────────────────────────────────────
-async def _apply_dod_verified(target: int, tries: int = 3) -> bool:
+# A discharge while held only counts as a real violation above this power AND
+# after this many consecutive 5-min checks. Both guards exist because the
+# inverter routinely draws a little from the pack while it hunts around the
+# solar-vs-load balance point; that self-corrects within minutes.
+_HOLD_DISCHARGE_W = 100
+_HOLD_STRIKES     = 3      # 3 × 5 min = sustained for ~15 min
+_hold_strikes     = 0
+
+
+async def _apply_dod_verified(target: int, tries: int = 3, source: str = "battery scheduler") -> bool:
     """Write DoD and confirm it stuck (AA55 writes are occasionally lost).
     Returns True if confirmed OR unverifiable (read timed out → assume applied);
-    False only if a successful read shows the wrong value (so we retry next cycle)."""
+    False only if a successful read shows the wrong value (so we retry next cycle).
+
+    Writes with notify=False and reports once at the end instead, so a retried
+    write is still a single Telegram message."""
     from inverter_io import apply_setting, inverter_lock
+    from notifications import notify_inverter_write
     last_read = None
+    confirmed = False
     for _ in range(tries):
-        await apply_setting(inverter, "dod", target)
+        await apply_setting(inverter, "dod", target, notify=False)
         await asyncio.sleep(3)
         try:
             async with inverter_lock:
                 d = await inverter.read_settings_data()
             v = d.get("dod"); last_read = int(getattr(v, "value", v))
             if last_read == target:
-                return True
+                confirmed = True
+                break
         except Exception:
             last_read = None
         await asyncio.sleep(2)
-    return last_read is None
+
+    ok = confirmed or last_read is None
+    state = ("confirmed" if confirmed
+             else "sent, read-back timed out" if last_read is None
+             else f"NOT applied — inverter still reports {last_read}%")
+    await notify_inverter_write(
+        "dod", target, f"on-grid DoD → {target}% (floor {100 - target}%, {state})",
+        source, error="" if ok else state)
+    return ok
+
+
+async def _hold_watchdog(target_dod: int) -> None:
+    """Catch the battery discharging while the scheduler believes it is held.
+
+    Most short discharges while held are NOT a fault: when production sits
+    just under the house load the inverter's regulation loop hunts around the
+    balance point and the pack covers the gap for a while (observed: 589 W
+    solar vs a 706 W house → 123 W out of the battery, back to charging a few
+    minutes later). Alerting on that would be pure noise, so a violation must
+    exceed _HOLD_DISCHARGE_W and persist for _HOLD_STRIKES consecutive 5-min
+    checks before it counts.
+
+    Only once it does count is the DoD read back — an extra AA55 read every
+    5 min all day is real load on a stack that is already fragile. The read
+    then separates two faults that look identical from outside:
+      - inverter reports the wrong DoD  → the AA55 write was lost; re-send it
+        (worth a flash write, this is the case the retry loop exists for)
+      - inverter reports the right DoD  → the firmware is ignoring its own
+        floor; re-writing the same value would only burn flash, so alert only.
+    """
+    global _hold_strikes
+    from inverter_io import inverter_lock
+    from notifications import notify_hold_violation
+
+    pbat = float(latest_data.get("pbattery1") or 0)      # normalised: + = charging
+    soc  = float(latest_data.get("battery_soc") or 0)
+
+    if pbat >= -_HOLD_DISCHARGE_W:
+        if _hold_strikes >= _HOLD_STRIKES:
+            await notify_hold_violation(soc, 0, target_dod, recovered=True)
+        _hold_strikes = 0
+        return
+
+    _hold_strikes += 1
+    if _hold_strikes < _HOLD_STRIKES:
+        log.debug("Hold watchdog: discharging %.0f W while held (strike %d/%d) — "
+                  "likely balance-point hunting, not acting yet",
+                  -pbat, _hold_strikes, _HOLD_STRIKES)
+        return
+    if _hold_strikes > _HOLD_STRIKES:
+        return                                           # already reported, stay quiet
+
+    dod_read = None
+    try:
+        async with inverter_lock:
+            d = await inverter.read_settings_data()
+        v = d.get("dod")
+        dod_read = int(getattr(v, "value", v))
+    except Exception:
+        pass                                              # read failed — treat as unknown
+
+    log.warning("Hold watchdog: discharging %.0f W at %.0f%% SoC for %d+ min while held "
+                "(target DoD %d, inverter reports %s)",
+                -pbat, soc, _HOLD_STRIKES * 5, target_dod,
+                dod_read if dod_read is not None else "?")
+    await notify_hold_violation(soc, -pbat, dod_read)
+
+    if dod_read is not None and dod_read != target_dod:
+        log.info("Hold watchdog: DoD drifted %s → re-sending %d", dod_read, target_dod)
+        await _apply_dod_verified(target_dod, source="hold watchdog")
 
 
 async def _charge_cap_tick(sch) -> None:
@@ -253,7 +334,7 @@ async def _charge_cap_tick(sch) -> None:
     if not (10 <= cap < 100):
         if braked:
             # Cap switched off while braked — release so charging isn't stuck off.
-            await apply_setting(inverter, "charge_i", release_current)
+            await apply_setting(inverter, "charge_i", release_current, "charge cap")
             sch.charge_cap_active = False
             save_schedule(sch)
             log.info("Charge cap disabled while braked — released (charge_i → %d)", release_current)
@@ -271,7 +352,7 @@ async def _charge_cap_tick(sch) -> None:
                    and (last_full is None or (date.today() - last_full).days >= interval))
     if balance_due:
         if braked:
-            await apply_setting(inverter, "charge_i", release_current)
+            await apply_setting(inverter, "charge_i", release_current, "charge cap")
             sch.charge_cap_active = False
             save_schedule(sch)
             log.info("Charge cap: BMS-balancing day — released for a full charge")
@@ -282,12 +363,12 @@ async def _charge_cap_tick(sch) -> None:
         return
 
     if not braked and soc >= cap:
-        await apply_setting(inverter, "charge_i", 0)
+        await apply_setting(inverter, "charge_i", 0, "charge cap")
         sch.charge_cap_active = True
         save_schedule(sch)
         log.info("Charge cap: SoC %.0f%% ≥ %d%% — charging braked", soc, cap)
     elif braked and soc <= cap - 5:
-        await apply_setting(inverter, "charge_i", release_current)
+        await apply_setting(inverter, "charge_i", release_current, "charge cap")
         sch.charge_cap_active = False
         save_schedule(sch)
         log.info("Charge cap: SoC %.0f%% ≤ %d%% — charging released", soc, cap - 5)
@@ -306,6 +387,7 @@ async def battery_forecast_scheduler():
        the cap (see _charge_cap_tick) — the actual 80% cap the owner wants,
        possible since the 0x0351 command was confirmed working (2026-07-30).
     """
+    global _hold_strikes
     from battery_schedule import load_schedule
     from forecast import current_hour_kwh
     last_dod = None
@@ -331,11 +413,17 @@ async def battery_forecast_scheduler():
                         release_at = int(getattr(sch, "max_soc", 100) or 100)
                         held = producing and (release_at >= 100 or soc < release_at)
                         desired = int(sch.day_dod if held else sch.night_dod)
+                        if not held:
+                            _hold_strikes = 0     # discharging is expected once released
                         if desired != last_dod:
                             ok = await _apply_dod_verified(desired)
                             last_dod = desired if ok else None   # not confirmed → retry next cycle
                             log.info("Battery forecast schedule: hour=%.2f kWh live=%.2f kW soc=%.0f%% held=%s DoD→%d (%s)",
                                      kwh, live_kw, soc, held, desired, "ok" if ok else "unconfirmed, retrying")
+                        elif held:
+                            # Steady state while held — verify the inverter is
+                            # actually honouring it (read-only unless it isn't).
+                            await _hold_watchdog(desired)
                 else:
                     last_dod = None
                 await _charge_cap_tick(sch)
@@ -436,7 +524,7 @@ async def write_setting(body: SettingWrite, _: str = Depends(require_auth)):
         raise HTTPException(503, "Inverter not connected")
     try:
         from inverter_io import apply_setting
-        result = await apply_setting(inverter, body.key, body.value)
+        result = await apply_setting(inverter, body.key, body.value, "web UI")
         log.info("Setting written: %s", result)
         return {"ok": True, "result": result}
     except Exception as e:
@@ -795,31 +883,6 @@ async def ws_inverter(websocket: WebSocket, token: str = Query(...)):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# WebSocket — BeagleBone BMS bridge
-# Frame: {"cell_voltages": [...], "temperatures": [...], "soc": 80, ...}
-# ─────────────────────────────────────────────────────────────────────────────
-@app.websocket("/ws/bms")
-async def ws_bms(websocket: WebSocket, token: str = Query(...)):
-    if not verify_token(token):
-        await websocket.close(code=4401)
-        return
-    await websocket.accept()
-    log.info("BeagleBone BMS bridge connected")
-    try:
-        while True:
-            frame  = json.loads(await websocket.receive_text())
-            merged = {f"bms_ext_{k}": v for k, v in frame.items()}
-            bms_data.update(merged)
-            await broadcast({"type": "data", "payload": {**latest_data, **merged}})
-    except WebSocketDisconnect:
-        log.info("BeagleBone BMS bridge disconnected")
-    except Exception as e:
-        log.error("BMS WS error: %s", e)
-    finally:
-        bms_data.clear()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Automations API
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -867,7 +930,7 @@ async def trigger_automation(aid: str, _: str = Depends(require_auth)):
             results = []
             for act in a.actions:
                 try:
-                    r = await auto_engine.execute(act, inverter)
+                    r = await auto_engine.execute(act, inverter, f"automation “{a.name}” (manual)")
                     results.append(r)
                 except Exception as e:
                     results.append(f"error: {e}")

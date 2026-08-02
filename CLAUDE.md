@@ -91,6 +91,29 @@ The 0xB9B9/0xB9BA "Force Charge / SoC upper limit" registers are a
 boost-to-target feature, confirmed NOT a cap (git 8df99ee9).
 **Integrated the same day** as the scheduler charge cap (see above).
 
+**A short discharge while "held" is normal, not a failed write.** When PV sits
+just under the house load the inverter's regulation loop hunts around the
+balance point and the pack covers the gap for a few minutes before charging
+resumes (observed 2026-08-02: 589 W solar vs a 706 W house → 123 W out of the
+battery at 21% SoC, DoD read back as 0, charging again shortly after). The
+`_hold_watchdog` in main only treats it as a violation above `_HOLD_DISCHARGE_W`
+(100 W) sustained for `_HOLD_STRIKES` (3) consecutive 5-min checks — and only
+*then* reads the DoD back, because an extra AA55 read every 5 min all day is
+real load on a fragile stack. If that read shows the wrong DoD the write was
+lost and is re-sent; if it shows the right DoD the firmware is ignoring its own
+floor, so it alerts only rather than burning flash on a redundant write.
+
+**Every inverter write is announced on Telegram.** `inverter_io.apply_setting()`
+is the single choke point for all commands, so the notification is raised there
+— the Settings page, automations, the battery scheduler and the Telegram bot are
+all covered without each remembering to. Failed writes are reported too (a
+silently ignored write is exactly what this platform does). The `source` arg
+only labels who asked; `notify=False` is for callers that write in a
+verify/retry loop and report the final outcome themselves (`_apply_dod_verified`),
+so one logical change stays one message. The post is dispatched as a background
+task — Telegram must never delay a write holding `inverter_lock`, nor turn a
+successful write into a failure.
+
 What the scheduler's `max_soc` field actually does: it's a discharge-hold
 release threshold, distinct from the charge cap (`charge_cap_soc`). While
 producing and SoC is below it, the battery is held (DoD 0, no discharge);
@@ -215,7 +238,4 @@ track). ES lacks `e_day_imp/exp`, so this is how import/export/flows are obtaine
 
 ## Future work (planned)
 
-- BeagleBone RS485/CAN bridge for per-cell BMS data → `/ws/bms` endpoint already exists.
-  Send JSON frames: `{"cell_voltages":[...],"temperatures":[...],"soc":N,...}`
-  Keys are prefixed `bms_ext_*` and shown on Battery page.
 - Proxmox LXC deploy: `bash install.sh` on the Proxmox host.

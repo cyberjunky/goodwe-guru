@@ -414,7 +414,7 @@ async def _set_mode(value: int) -> str:
         return "Inverter not connected."
     try:
         from inverter_io import apply_setting
-        await apply_setting(inv, "work_mode", value)
+        await apply_setting(inv, "work_mode", value, "Telegram bot")
         return f"✅ Work mode set to <b>{WORK_MODE_NAMES.get(value, value)}</b>."
     except Exception as e:
         return f"⚠️ Failed to set mode: {e}"
@@ -427,7 +427,7 @@ async def _set_dod(value: int) -> str:
     value = max(0, min(int(value), 90))
     try:
         from inverter_io import apply_setting
-        await apply_setting(inv, "dod", value)
+        await apply_setting(inv, "dod", value, "Telegram bot")
         if value == 0:
             return "🛡 Battery <b>held</b> (floor 100% — won't discharge; grid covers the house)."
         return f"🔋 Battery floor set: DoD <b>{value}%</b> (discharges down to {100-value}% SoC)."
@@ -441,7 +441,7 @@ async def _set_export(value: int) -> str:
         return "Inverter not connected."
     try:
         from inverter_io import apply_setting
-        await apply_setting(inv, "grid_export_limit", int(value))
+        await apply_setting(inv, "grid_export_limit", int(value), "Telegram bot")
         return f"✅ Grid export limit set to <b>{int(value)} W</b>."
     except Exception as e:
         return f"⚠️ Failed to set export limit: {e}"

@@ -55,13 +55,45 @@ _OPMODE = {
 inverter_lock = asyncio.Lock()
 
 
-async def apply_setting(inverter, key: str, value) -> str:
-    """Write one setting via the best available method. Returns a short description."""
+async def apply_setting(inverter, key: str, value, source: str = "",
+                        notify: bool = True) -> str:
+    """Write one setting via the best available method. Returns a short description.
+
+    This is the single choke point for every command the app sends to the
+    inverter, so it is also where the Telegram "setting sent" notification is
+    raised — the Settings page, automations, the battery scheduler and the
+    Telegram bot are all covered without each having to remember. `source`
+    labels who asked, and is only used for that message.
+
+    The notification is dispatched as a background task: Telegram is a network
+    call that can be slow or down, and it must never delay a write that is
+    holding `inverter_lock`, nor turn a successful write into a failure.
+
+    `notify=False` is for callers that write in a verify/retry loop and report
+    the final outcome themselves, so one logical change stays one message.
+    """
     if inverter is None:
         raise RuntimeError("Inverter not connected")
 
-    async with inverter_lock:
-        return await _apply_setting_locked(inverter, key, value)
+    try:
+        async with inverter_lock:
+            desc = await _apply_setting_locked(inverter, key, value)
+    except Exception as e:
+        if notify:
+            _notify_write(key, value, "", source, error=f"{type(e).__name__}: {e}")
+        raise
+    if notify:
+        _notify_write(key, value, desc, source)
+    return desc
+
+
+def _notify_write(key: str, value, desc: str, source: str, error: str = "") -> None:
+    try:
+        from notifications import notify_inverter_write
+        asyncio.get_running_loop().create_task(
+            notify_inverter_write(key, value, desc, source, error))
+    except Exception as e:      # no loop, import problem — never break the write
+        log.debug("write notification skipped: %s", e)
 
 
 async def _apply_setting_locked(inverter, key: str, value) -> str:

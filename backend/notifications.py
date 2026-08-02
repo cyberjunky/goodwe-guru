@@ -15,6 +15,14 @@ Events detected on every inverter poll tick:
   - high_import        pgrid > high_import_threshold_w
   - daily_summary      sent once at configured wall-clock hour
 
+Sent outside the poll tick:
+  - inverter_write     every setting/mode/register command this app sends to
+                       the inverter (hooked into inverter_io.apply_setting, so
+                       it covers the Settings page, automations, the battery
+                       scheduler and the Telegram bot alike), success or failure
+  - hold_violation     the battery is discharging while the scheduler believes
+                       it is held (the inverter ignored / dropped the DoD write)
+
 Setup:
   1. Create a Telegram bot via @BotFather → get BOT_TOKEN
   2. Start a chat with the bot or add it to a group → get CHAT_ID
@@ -58,6 +66,8 @@ class NotificationConfig:
     high_import_enabled:      bool  = False
     daily_summary_enabled:    bool  = True
     inverter_offline_enabled: bool  = True
+    inverter_write_enabled:   bool  = True   # every command we send to the inverter
+    hold_violation_enabled:   bool  = True   # discharging while the hold says it shouldn't
 
     # Thresholds
     bat_critical_soc:         int   = 10
@@ -136,6 +146,7 @@ class NotificationState:
         self.last_daily_summary_date: date | None = None
         self.inverter_offline_since: float | None = None
         self.inverter_offline_sent = False
+        self.hold_violation_sent   = False
 
 
 _state = NotificationState()
@@ -174,6 +185,75 @@ async def notify_inverter_connection(ok: bool):
                 f"Check the inverter's power and Wi-Fi/network connection.\n"
                 f"The dashboard keeps running — data resumes automatically "
                 f"once the inverter is back.")
+
+
+_WRITE_LABELS = {
+    "work_mode":         "Work mode",
+    "dod":               "On-grid DoD",
+    "charge_i":          "Charge current",
+    "grid_export_limit": "Grid export limit",
+    "eco_charge":        "Eco charge",
+    "eco_discharge":     "Eco discharge",
+}
+
+
+async def notify_inverter_write(key: str, value: Any, description: str,
+                                source: str = "", error: str = "") -> None:
+    """Report one command sent to the inverter (see inverter_io.apply_setting).
+
+    Fire-and-forget: called from the write path, so it must never raise or
+    block — a failing Telegram post must not turn a successful inverter write
+    into an error. `description` is apply_setting's own summary (already in
+    human units, e.g. "charge current → 0.0 A"); `error` set means the write
+    raised, and is reported too — a silently failing write is exactly what the
+    owner needs to see.
+    """
+    try:
+        nc = load_notification_config()
+        if not nc.enabled or not nc.inverter_write_enabled:
+            return
+        label = _WRITE_LABELS.get(key, key)
+        via   = f"\n<i>via {source}</i>" if source else ""
+        if error:
+            await send_telegram(nc,
+                f"⚠️ <b>Inverter write FAILED</b>\n"
+                f"{label} → <code>{value}</code>\n"
+                f"<code>{error}</code>{via}")
+        else:
+            await send_telegram(nc,
+                f"🎛 <b>Inverter setting sent</b>\n"
+                f"{label}: {description}{via}")
+    except Exception as e:                      # never propagate into the write path
+        log.warning("notify_inverter_write: %s", e)
+
+
+async def notify_hold_violation(soc: float, discharge_w: float, dod: int | None,
+                                recovered: bool = False) -> None:
+    """The battery is discharging although the scheduler holds it (DoD floor).
+
+    Edge-triggered so a persistent violation alerts once, not every 5 min.
+    """
+    try:
+        nc = load_notification_config()
+        if not nc.enabled or not nc.hold_violation_enabled:
+            return
+        if recovered:
+            if not _state.hold_violation_sent:
+                return
+            _state.hold_violation_sent = False
+            await send_telegram(nc, "✅ <b>Battery hold is holding again</b> — discharge stopped.")
+            return
+        if _state.hold_violation_sent:
+            return
+        _state.hold_violation_sent = True
+        floor = "unknown" if dod is None else f"{100 - dod}%"
+        await send_telegram(nc,
+            f"🔋 <b>Battery hold not honoured</b>\n"
+            f"Discharging {fmt_power(discharge_w)} at {soc:.0f}% SoC while held "
+            f"(DoD {dod if dod is not None else '?'} = floor {floor}).\n"
+            f"Re-sending the DoD command.")
+    except Exception as e:
+        log.warning("notify_hold_violation: %s", e)
 
 
 async def check_and_notify(data: dict[str, Any], daily_stats: dict[str, Any] | None = None,

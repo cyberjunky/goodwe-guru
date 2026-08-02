@@ -87,9 +87,6 @@ below). A "Check now" button runs it on demand from the Settings page.
   - `/hold` `/normal` `/dod <0-90>` `/export <W>` `/mode …` — control
   - inline-button menu for everything
 
-### External BMS bridge (BeagleBone / RS485 / CAN)
-Per-cell data connects via WebSocket `/ws/bms` and is merged into the live stream.
-
 ---
 
 ## Architecture
@@ -106,8 +103,6 @@ Per-cell data connects via WebSocket `/ws/bms` and is merged into the live strea
 │  Browser ◀── React SPA     ├─ Telegram notifications    │
 │  (served as static files)  ├─ Forecast.Solar API        │
 │                            └─ Automation engine (30s)   │
-│                                                         │
-│  /ws/bms ◀── BeagleBone RS485/CAN bridge                │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -175,18 +170,6 @@ Settings → **Tariffs** tab and Settings → **Forecast** tab (in-app).
 2. Start a chat with the bot or add it to a group
 3. Visit `https://api.telegram.org/bot{TOKEN}/getUpdates` → find Chat ID
 4. Enter both in Settings → **Notifications** → Save
-
----
-
-## BeagleBone BMS bridge
-
-Connect your RS485/CAN reader to `/ws/bms?token=<jwt>` and send JSON frames:
-
-```json
-{"cell_voltages":[3.42,3.41,3.43],"temperatures":[28.1],"soc":78,"current":35.7,"voltage":51.6}
-```
-
-Keys appear as `bms_ext_*` in the live data stream and Battery page.
 
 ---
 

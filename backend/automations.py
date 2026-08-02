@@ -207,39 +207,42 @@ def check(automation: Automation | dict, data: dict) -> bool:
 # Action execution
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def execute(action: dict, inverter: Any) -> str:
-    """Execute one action. Returns a short description of what was done."""
+async def execute(action: dict, inverter: Any, source: str = "automation") -> str:
+    """Execute one action. Returns a short description of what was done.
+
+    `source` only labels the Telegram "setting sent" message raised inside
+    apply_setting, so an alert names the rule that caused the write."""
     atype = action.get("type")
 
     if atype == "write_setting":
         key = action.get("setting", "")
         val = action.get("value")
         if key and val is not None and inverter:
-            return await apply_setting(inverter, key, val)
+            return await apply_setting(inverter, key, val, source)
 
     elif atype == "set_dod":
         # Battery floor: 0 = no discharge (hold), 80 = normal (floor 20%).
         if inverter:
-            return await apply_setting(inverter, "dod", int(action.get("value", 80)))
+            return await apply_setting(inverter, "dod", int(action.get("value", 80)), source)
 
     elif atype == "set_work_mode":
         if inverter:
-            return await apply_setting(inverter, "work_mode", int(action.get("value", 0)))
+            return await apply_setting(inverter, "work_mode", int(action.get("value", 0)), source)
 
     elif atype == "set_general_mode":
         if inverter:
-            return await apply_setting(inverter, "work_mode", 0)
+            return await apply_setting(inverter, "work_mode", 0, source)
 
     elif atype == "eco_charge":
         # ECO_CHARGE convenience mode — ECO + all-day charge schedule capped at the
         # target SoC in one call. Never write eco_mode_1 as a string: EcoModeV2
         # silently rejects it, leaving ECO mode scheduleless and charging to 100%.
         if inverter:
-            return await apply_setting(inverter, "eco_charge", int(action.get("soc", 90)))
+            return await apply_setting(inverter, "eco_charge", int(action.get("soc", 90)), source)
 
     elif atype == "eco_discharge":
         if inverter:
-            return await apply_setting(inverter, "eco_discharge", int(action.get("value") or 100))
+            return await apply_setting(inverter, "eco_discharge", int(action.get("value") or 100), source)
 
     elif atype == "notify":
         msg = action.get("message", "Automation triggered")
@@ -287,7 +290,7 @@ async def run_loop(get_data, get_inverter):
                     results = []
                     for act in a.actions:
                         try:
-                            r = await execute(act, inverter)
+                            r = await execute(act, inverter, f"automation “{a.name}”")
                             results.append(r)
                         except Exception as e:
                             log.error("Automation action error: %s", e)

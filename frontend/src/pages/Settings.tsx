@@ -227,6 +227,8 @@ function NotificationSettings() {
     { key: 'solar_start_stop_enabled',  label: 'Solar start / stop',        desc: 'Production begins & ends each day' },
     { key: 'high_import_enabled',       label: 'High grid import',          desc: `Grid import > ${cfg.high_import_threshold_w ?? 3000} W` },
     { key: 'daily_summary_enabled',     label: 'Daily summary',             desc: `Sent at ${cfg.daily_summary_hour ?? 20}:00` },
+    { key: 'inverter_write_enabled',    label: 'Inverter commands sent',    desc: 'Every mode / DoD / register write, and any that fail' },
+    { key: 'hold_violation_enabled',    label: 'Battery hold not honoured', desc: 'Still discharging 15+ min after the hold was applied' },
   ]
 
   return (
