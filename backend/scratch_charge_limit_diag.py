@@ -25,6 +25,17 @@ read off instead of guessed, then re-prints the ones that bear on the above.
 Writes NOTHING. Safe to run at any time — though run it while there IS solar
 surplus, otherwise a low charge current tells you nothing.
 
+CONNECTING: this opens its own AA55/UDP session, which competes with the
+running service's poll loop — inverter_lock only serializes callers *inside*
+the app. A failed connect here usually means contention, or the WiFi module
+sulking after recent writes, not a dead inverter. So connect is retried a few
+times with a LONG pause (that stack crashes under rapid retries). If it still
+fails, take the service out of the way for the one-shot read:
+
+  systemctl stop goodwe-guru
+  cd /opt/goodwe-guru/backend && ../.venv/bin/python3 scratch_charge_limit_diag.py
+  systemctl start goodwe-guru
+
 Usage (on the CT):
   cd /opt/goodwe-guru/backend
   ../.venv/bin/python3 scratch_charge_limit_diag.py
@@ -122,10 +133,38 @@ def _verdict(settings: dict, runtime: dict) -> None:
     print("  it in SolarGo; it is not written by this app.")
 
 
-async def main():
+async def _connect(attempts: int = 3, pause: int = 20):
+    """Connect, tolerating the contention/sulk described in the docstring.
+
+    Long pause between attempts on purpose: goodwe.connect() already retries
+    internally, and hammering the ES WiFi module is what crashes it.
+    """
     import goodwe
-    print(f"Connecting to inverter at {cfg.inverter_host} ...")
-    inverter = await goodwe.connect(cfg.inverter_host)
+    for n in range(1, attempts + 1):
+        try:
+            print(f"Connecting to inverter at {cfg.inverter_host} "
+                  f"(attempt {n}/{attempts}) ...")
+            return await goodwe.connect(cfg.inverter_host)
+        except Exception as e:
+            print(f"  failed: {type(e).__name__}: {str(e).splitlines()[0]}")
+            if n == attempts:
+                print("\nGiving up. The inverter is not answering at all — most likely the\n"
+                      "running service has the stack busy, or the WiFi module needs a few\n"
+                      "minutes after recent writes. Check the dashboard: if the app is\n"
+                      "offline too, wait (or power-cycle) rather than retrying in a loop.\n"
+                      "Otherwise stop the service for this one read:\n"
+                      "  systemctl stop goodwe-guru && "
+                      "../.venv/bin/python3 scratch_charge_limit_diag.py; "
+                      "systemctl start goodwe-guru")
+                return None
+            print(f"  waiting {pause}s before retrying (never hammer this stack) ...")
+            await asyncio.sleep(pause)
+
+
+async def main():
+    inverter = await _connect()
+    if inverter is None:
+        return
     print(f"Connected: {inverter.model_name} {inverter.serial_number} "
           f"({inverter.__class__.__name__})")
 
