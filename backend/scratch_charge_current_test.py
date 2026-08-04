@@ -22,9 +22,14 @@ This command has NEVER been tested here.
 PAYLOAD ENCODING (from the app):
   chargeV = volts x 10  (app default 575 = 57.5 V; matches library's
                          Decimal("charge_v", 24, 10) settings offset)
-  chargeI = amps x 10   (app UI accepts 0-100 A, stores value x 10;
-                         library reads offset 26 as a raw Integer, so we
-                         reuse the raw value we read — apples to apples)
+  chargeI = WHOLE AMPS  (the library reads offset 26 as an Integer with unit
+                         "A" and no scaling — NOT amps x 10, as this file and
+                         CLAUDE.md both claimed until 2026-08-04. Confirmed by
+                         the settings dump: charge_i reads "49 A" while the
+                         runtime field battery_charge_limit reads "50 A".
+                         Values above the BMS ceiling are clamped to it, which
+                         is why `set 186` reads back as 49 — normal, not a
+                         failed write.)
 The command writes BOTH values together, so we always re-send the voltage
 we just read and only change the current.
 
@@ -40,7 +45,7 @@ Usage (on the CT):
   ../.venv/bin/python3 scratch_charge_current_test.py read
   ../.venv/bin/python3 scratch_charge_current_test.py test
   ../.venv/bin/python3 scratch_charge_current_test.py revert
-  ../.venv/bin/python3 scratch_charge_current_test.py set 186   # raw = A x 10
+  ../.venv/bin/python3 scratch_charge_current_test.py set 50    # amps
 
 WHAT TO WATCH AFTER `test` (only meaningful while PV is producing surplus):
   - Battery power (pbattery1) drops to ~0 W and SoC stops climbing

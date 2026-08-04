@@ -326,7 +326,12 @@ async def _charge_cap_tick(sch) -> None:
 
     cap = int(getattr(sch, "charge_cap_soc", 0) or 0)
     braked = bool(getattr(sch, "charge_cap_active", False))
-    release_current = int(getattr(sch, "charge_cap_release_current", 186) or 186)
+    # Amps. Prefer the BMS's own live ceiling so the release always restores
+    # full allowed current even if the configured value is stale/too low.
+    release_current = int(getattr(sch, "charge_cap_release_current", 50) or 50)
+    bms_limit = int(float(latest_data.get("battery_charge_limit") or 0))
+    if bms_limit > 0:
+        release_current = max(release_current, bms_limit)
     soc = float(latest_data.get("battery_soc") or 0)
     if soc <= 0:
         return   # no valid SoC yet — don't act blind

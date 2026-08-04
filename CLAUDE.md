@@ -83,10 +83,19 @@ command works, same precedent as `set_ongrid_battery_dod` (0x0560).
 **Live-tested on the owner's GW3648D-ES: charge_i=0 stops PV charging
 immediately (surplus exports instead); restoring the original value resumes
 charging.** Wire units: charge_v = V×10 (53.0 V → 530), charge_i = A×10
-(18.6 A → 186). The command writes both, so always re-send the voltage just
-read. Read-back of charge_i drifts (BMS-negotiated: 186→49→13 observed) —
-normal, don't treat a mismatched read-back as failure. Standalone test
-script: `backend/scratch_charge_current_test.py` (read/test/revert/set).
+and **charge_i = WHOLE AMPS** (corrected 2026-08-04 — this said A×10 and was
+wrong; the library reads `charge_i` with unit "A" and no scaling, unlike
+`charge_v`). The command writes both, so always re-send the voltage just read.
+
+**The BMS clamps charge_i to its own ceiling, exposed as the runtime field
+`battery_charge_limit`** (50 A on this pack; `battery_discharge_limit` is
+25 A). Writing 186 reads back as 49 — that is the clamp doing its job, not a
+lost write and not the "BMS-negotiated drift" this file previously described.
+So 49 A ≈ **2.6 kW** of charge headroom: charge current is NOT what limits
+charging here, and a scheduler-side "charge current floor" would be pointless.
+Standalone scripts: `backend/scratch_charge_current_test.py`
+(read/test/revert/set) and `backend/scratch_charge_limit_diag.py` (read-only
+dump of every settings + runtime field, for exactly this kind of question).
 The 0xB9B9/0xB9BA "Force Charge / SoC upper limit" registers are a
 boost-to-target feature, confirmed NOT a cap (git 8df99ee9).
 **Integrated the same day** as the scheduler charge cap (see above).

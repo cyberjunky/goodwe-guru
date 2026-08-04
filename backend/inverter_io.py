@@ -127,7 +127,11 @@ async def _apply_setting_locked(inverter, key: str, value) -> str:
     if key == "charge_i":
         # Dedicated AA55 0x0351 "set battery charge parameters" — the only
         # write path that actually works on ES (see module docstring). Value
-        # is raw, in 0.1 A units (186 = 18.6 A); 0 brakes all charging.
+        # is in WHOLE AMPS (the library reads charge_i with unit "A", no
+        # scaling — unlike charge_v, which is V x 10); 0 brakes all charging.
+        # Anything above the BMS's own ceiling is clamped to it: writing 186
+        # read back as 49 on this pack, whose runtime `battery_charge_limit`
+        # is 50 A. That clamp is normal and is not a failed write.
         # The command also carries the charge voltage, so re-send the
         # voltage just read, unchanged.
         from goodwe.protocol import Aa55ProtocolCommand
@@ -137,7 +141,7 @@ async def _apply_setting_locked(inverter, key: str, value) -> str:
         v_raw = int(round(float(getattr(v, "value", v)) * 10))
         await inverter._read_from_socket(
             Aa55ProtocolCommand(f"035104{v_raw:04x}{current_raw:04x}", "03d1"))
-        return f"charge current → {current_raw / 10:.1f} A"
+        return f"charge current → {current_raw} A"
 
     if key == "grid_export_limit":
         await inverter.set_grid_export_limit(int(value))

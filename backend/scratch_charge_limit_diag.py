@@ -99,38 +99,53 @@ def _verdict(settings: dict, runtime: dict) -> None:
     """Point at the most likely cause from the numbers we just read."""
     g = lambda d, *keys: next((_unwrap(d[k]) for k in keys if k in d), None)  # noqa: E731
 
-    charge_i = g(settings, "charge_i")
-    charge_v = g(settings, "charge_v")
-    soc      = g(runtime, "battery_soc", "bms_bat_soc")
-    tmax     = g(runtime, "battery_max_cell_temp", "battery_temperature", "bms_bat_temperature")
-    tmin     = g(runtime, "battery_min_cell_temp")
-    vmax     = g(runtime, "battery_max_cell_voltage")
-    vmin     = g(runtime, "battery_min_cell_voltage")
-    pbat     = g(runtime, "pbattery1")
-    capacity = g(settings, "battery_capacity", "battery_modules")
+    charge_i  = g(settings, "charge_i")            # WHOLE AMPS, not 0.1 A
+    charge_v  = g(settings, "charge_v")
+    bms_climt = g(runtime, "battery_charge_limit")  # the BMS ceiling that clamps charge_i
+    bms_dlimt = g(runtime, "battery_discharge_limit")
+    soc       = g(runtime, "battery_soc")
+    temp      = g(runtime, "battery_temperature")   # ES exposes no per-cell temps
+    soh       = g(runtime, "battery_soh")
+    berr      = g(runtime, "battery_error")
+    bwarn     = g(runtime, "battery_warning")
+    pbat      = g(runtime, "pbattery1")
+    ibat      = g(runtime, "ibattery1")
+    capacity  = g(settings, "capacity")
+    ppv       = g(runtime, "ppv")
+    load      = g(runtime, "house_consumption", "pload")
+    pgrid     = g(runtime, "pgrid")
+
+    def f(x, d=0.0):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return d
 
     print(f"\n{'=' * 72}\nREAD-OFF\n{'=' * 72}")
     if charge_i is not None and charge_v is not None:
-        try:
-            amps = float(charge_i) / 10.0
-            print(f"  charge_i {charge_i} raw = {amps:.1f} A -> ceiling "
-                  f"~{amps * float(charge_v):.0f} W at {float(charge_v):.1f} V")
-        except Exception:
-            pass
-    print(f"  SoC ................. {soc}")
-    print(f"  cell temp min/max ... {tmin} / {tmax}   (LFP derates below ~5 C, above ~45 C)")
-    print(f"  cell volt min/max ... {vmin} / {vmax}")
-    if vmax is not None and vmin is not None:
-        try:
-            print(f"  cell delta .......... {float(vmax) - float(vmin):.3f} V   "
-                  f"(>0.1 V suggests imbalance-driven taper)")
-        except Exception:
-            pass
-    print(f"  battery power now ... {pbat} W")
-    print(f"  configured capacity . {capacity}   (too low = current limit sized for less pack)")
-    print("\n  If temps and cell delta are both healthy and capacity is right, the")
-    print("  remaining suspect is the cloud-pushed BatBMSCurrLmtCoff (80) — check")
-    print("  it in SolarGo; it is not written by this app.")
+        print(f"  charge_i {charge_i} A x {f(charge_v):.1f} V -> ~{f(charge_i) * f(charge_v):.0f} W "
+              f"of charge headroom")
+    print(f"  BMS charge / discharge limit ... {bms_climt} A / {bms_dlimt} A")
+    if charge_i is not None and bms_climt is not None and f(charge_i) >= f(bms_climt) - 1:
+        print("     -> charge_i is AT the BMS ceiling. Raising it does nothing;")
+        print("        anything higher is clamped to this. Not the bottleneck.")
+    print(f"  SoC / SoH ..................... {soc}% / {soh}%")
+    print(f"  battery temperature ........... {temp} C   (LFP derates below ~5 C, above ~45 C)")
+    print(f"  battery error / warning ....... {berr} / {bwarn}   (non-zero = pack is limiting itself)")
+    print(f"  configured capacity ........... {capacity}")
+
+    # The usual real answer: nothing is throttling, there is simply no surplus.
+    print(f"\n  PV {ppv} W - load {load} W = surplus {f(ppv) - f(load):.0f} W")
+    print(f"  battery now ................... {pbat} W ({ibat} A)   grid {pgrid} W")
+    surplus = f(ppv) - f(load)
+    if surplus < 200:
+        print("     -> NO MEANINGFUL SURPLUS right now, so a low charge power says")
+        print("        nothing about limits. Re-run when PV clearly exceeds the house")
+        print("        load, otherwise this whole dump is inconclusive.")
+    elif f(pbat) < surplus * 0.5 and f(charge_i) > 5:
+        print("     -> surplus exists, charge current is not the limit, yet the pack")
+        print("        is not taking it. THAT is the real question — look at work_mode,")
+        print("        dod/hold state, grid_export_limit and battery_mode_label above.")
 
 
 async def _connect(attempts: int = 3, pause: int = 20):

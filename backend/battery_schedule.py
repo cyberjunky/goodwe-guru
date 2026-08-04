@@ -44,9 +44,14 @@ class BatterySchedule:
                                  # (100 = hold all day). A release threshold, not a
                                  # cap — the cap below is what stops charging.
     charge_cap_soc:              int   = 0    # brake ALL charging at this SoC (0 = off)
-    charge_cap_release_current:  int   = 186  # raw 0.1 A units written on release
-                                              # (186 = 18.6 A, the value found
-                                              # commissioned on 2026-07-30)
+    charge_cap_release_current:  int   = 50   # AMPS written on release (charge_i
+                                              # is whole amps, not 0.1 A — see
+                                              # inverter_io). 50 = this pack's BMS
+                                              # ceiling, read from the runtime
+                                              # field `battery_charge_limit`;
+                                              # anything higher is clamped to it,
+                                              # so a too-large value is harmless
+                                              # but misleading.
     charge_cap_full_every_days:  int   = 14   # skip the cap this often for a 100%
                                               # BMS-balancing charge (0 = never)
     # ── scheduler state (persisted, not user settings) ──
