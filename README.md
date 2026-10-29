@@ -25,9 +25,15 @@ A self-hosted web dashboard for monitoring and controlling GoodWe inverters and 
   limit switch on: the house uses solar first, the battery takes the surplus, and
   whatever is left is curtailed instead of fed in. Telegram alert if export
   persists. For when you get nothing (or pay) for feed-in.
-- All inverter writes go through the goodwe library's dedicated methods
-  (`set_operation_mode`, `set_ongrid_battery_dod`, `set_grid_export_limit`), which
-  is what actually sticks on the ES (raw register writes are silently ignored)
+  **Setup:** Battery page → turn on **Zero export**, and turn **"Stop charging
+  at"** off. With nothing exported, braking the charge only throws the solar
+  away. To check or set it by hand, use `backend/scratch_export_limit.py`
+  (`read` / `set 0` / `enforce on`).
+- All inverter writes go through dedicated commands, which is what actually
+  sticks on the ES (raw register writes are silently ignored):
+  `set_operation_mode`, `set_ongrid_battery_dod` (0x0560),
+  `set_grid_export_limit` (0x0335), the export-limit switch (0x0353), and
+  the charge current (0x0351)
 
 ### All settings exposed (not just what SolarGo shows)
 | Setting | SolarGo | GoodWe Guru |
@@ -157,6 +163,16 @@ View logs: `journalctl -u goodwe-guru -f`
   shows progress and an update-log viewer).
 - **CLI (in the container):** `goodwe-guru-update` (or `--quick` to skip rebuilds).
 - **From the Proxmox host:** `pct exec <ctid> -- goodwe-guru-update`
+
+**Update fails with "untracked working tree files would be overwritten …
+frontend/package-lock.json"?** The lockfile has been committed since `e6bc9f5`.
+Older installs generated their own copy, and that copy blocks the pull. Since
+`f7d0d97` the updater removes it automatically. A container still on an older
+`update.sh` needs it removed once by hand:
+
+```bash
+rm /opt/goodwe-guru/frontend/package-lock.json && goodwe-guru-update
+```
 
 ---
 

@@ -117,6 +117,8 @@ so with the limit at 0 the remainder is curtailed, not exported. Two fields:
 The scheduler's `zero_export` flag (Battery page) re-checks both once on enable /
 startup, then only reads them back after polled `pgrid` shows > 150 W export
 for 3 consecutive 5-min checks — drifted → re-send; correct → alert only.
+Standalone check/set tool: `backend/scratch_export_limit.py`
+(`read` / `set <W>` / `enforce on|off`).
 With zero export the **charge cap wastes solar** (braked surplus is curtailed,
 not exported) — the Battery page warns when both are on. The old automation
 templates that toggled the export limit (and restored 6000 W at full SoC) are gone.
