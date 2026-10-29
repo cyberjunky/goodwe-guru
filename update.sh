@@ -70,6 +70,18 @@ BEFORE=$(git rev-parse --short HEAD)
 _status running
 
 info "Fetching latest code …"
+# frontend/package-lock.json is committed since e6bc9f5. Older checkouts had
+# none, so `npm install` generated an untracked one — which then blocks the
+# pull ("untracked working tree file would be overwritten"). It's a build
+# artifact; the repo's copy wins, whether ours is untracked or modified.
+LOCK=frontend/package-lock.json
+if [[ -f "$LOCK" ]]; then
+  if ! git ls-files --error-unmatch "$LOCK" >/dev/null 2>&1; then
+    rm -f "$LOCK"
+  elif ! git diff --quiet -- "$LOCK"; then
+    git checkout -- "$LOCK"
+  fi
+fi
 git fetch --all --prune --quiet
 if [[ -n "$REF" ]]; then
   git checkout "$REF"

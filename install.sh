@@ -296,8 +296,8 @@ ok "Python venv ready"
 # ── Build React frontend ──────────────────────────────────────────────────────
 info "Building frontend … (this is the heaviest step — needs ≥1.5 GB RAM)"
 cd "$APP_DIR/frontend"
-# Repo has no committed package-lock.json (it's .gitignored), and `npm ci`
-# requires one — fall back to `npm install`.
+# package-lock.json is committed (since e6bc9f5) → reproducible `npm ci`;
+# `npm install` stays as the fallback for checkouts that predate it.
 if [[ -f package-lock.json ]]; then npm ci; else npm install; fi
 npm run build
 # A silent OOM-kill leaves no error but no dist either — fail loudly here.
