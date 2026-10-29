@@ -10,14 +10,14 @@ interface Automation {
   cooldown: number; last_triggered: number; trigger_count: number
 }
 interface Template {
-  id: string; name: string; description: string; multi?: boolean
+  id: string; name: string; description: string
   params?: { key: string; label: string; type: string; min?: number; max?: number; default: number | string }[]
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const SENSORS: Record<string, string> = {
   battery_soc: 'Battery SoC (%)', ppv: 'Solar Power (W)',
-  pgrid: 'Grid Power (W)', pbattery: 'Battery Power (W)',
+  pgrid: 'Grid Power (W)', pbattery1: 'Battery Power (W, + = charging)',
   load_ptotal: 'Home Load (W)', temperature: 'Inverter Temp (°C)',
   battery_temperature: 'Battery Temp (°C)',
 }
@@ -239,7 +239,9 @@ function AutomationForm({ initial, onSave, onCancel }:
 function TemplateCard({ tpl, onInstall }: { tpl: Template; onInstall: (tpl: Template, params: Record<string, number>) => void }) {
   const [open, setOpen]     = useState(false)
   const [params, setParams] = useState<Record<string, number>>(
-    Object.fromEntries((tpl.params ?? []).map(p => [p.key.split('.').pop()!, p.default as number]))
+    // Keyed by the full path — two params can share a last segment
+    // (peak shaving has conditions.0.value AND conditions.1.value).
+    Object.fromEntries((tpl.params ?? []).map(p => [p.key, p.default as number]))
   )
   const [busy, setBusy] = useState(false)
 
@@ -272,8 +274,8 @@ function TemplateCard({ tpl, onInstall }: { tpl: Template; onInstall: (tpl: Temp
                 <div key={p.key}>
                   <label className="block text-[10px] text-gray-500 mb-0.5">{p.label}</label>
                   <input type={p.type} min={p.min} max={p.max}
-                    value={params[p.key.split('.').pop()!] ?? p.default}
-                    onChange={e => setParams(prev => ({ ...prev, [p.key.split('.').pop()!]: +e.target.value }))}
+                    value={params[p.key] ?? p.default}
+                    onChange={e => setParams(prev => ({ ...prev, [p.key]: +e.target.value }))}
                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500" />
                 </div>
               ))}
@@ -282,7 +284,7 @@ function TemplateCard({ tpl, onInstall }: { tpl: Template; onInstall: (tpl: Temp
           <button onClick={install} disabled={busy}
             className="flex items-center gap-2 bg-amber-500/90 hover:bg-amber-500 disabled:opacity-50 text-gray-950 font-semibold text-xs px-4 py-2 rounded-lg transition-colors">
             {busy ? <RefreshCw size={13} className="animate-spin" /> : <Plus size={13} />}
-            {tpl.multi ? 'Install automation set' : 'Install automation'}
+            Install automation
           </button>
         </div>
       )}
@@ -305,10 +307,10 @@ export default function Automations() {
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
-    const [al, tl] = await Promise.all([
-      fetch('/api/automations',           { headers }).then(r => r.json()).catch(() => []),
-      fetch('/api/automations/templates', { headers }).then(r => r.json()).catch(() => []),
-    ])
+    // Non-OK → [] : a {detail} error body is not a list and .map would crash.
+    const get = (url: string) => fetch(url, { headers })
+      .then(r => r.ok ? r.json() : []).then(j => Array.isArray(j) ? j : []).catch(() => [])
+    const [al, tl] = await Promise.all([get('/api/automations'), get('/api/automations/templates')])
     setList(al)
     setTpls(tl)
   }
@@ -339,9 +341,14 @@ export default function Automations() {
 
   async function trigger(id: string) {
     setBusy(id)
-    const r = await fetch(`/api/automations/${id}/trigger`, { method: 'POST', headers })
-    const j = await r.json()
-    setBusy(null)
+    let r: Response, j: { results?: string[]; detail?: string }
+    try {
+      r = await fetch(`/api/automations/${id}/trigger`, { method: 'POST', headers })
+      j = await r.json().catch(() => ({}))
+    } catch (e) {
+      alert(`Trigger failed: ${(e as Error).message}`); return
+    } finally { setBusy(null) }
+    if (!r.ok) { alert(`Trigger failed: ${j.detail ?? r.statusText}`); return }
     alert(`Triggered!\n${j.results?.join('\n') ?? 'done'}`)
   }
 

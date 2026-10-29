@@ -1,21 +1,21 @@
 import { useState, useEffect } from 'react'
 import { useInverter } from '../context/InverterContext'
 import StatCard from '../components/StatCard'
-import { Battery as BatteryIcon, Thermometer, Activity, Cpu, ShieldCheck, BatteryCharging, Sunrise } from 'lucide-react'
+import { Battery as BatteryIcon, Thermometer, Activity, Cpu, ShieldCheck, BatteryCharging, Sunrise, Ban } from 'lucide-react'
 
 /** Depth-of-Discharge readout + Hold/Normal control (uses set_ongrid_battery_dod). */
 function DischargeControl() {
   const token = localStorage.getItem('gw_token') ?? ''
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-  const [dod, setDod] = useState<number | null>(null)
+  // DoD comes from the shared context settings (BatteryConfig loads them once
+  // for the page) — every /api/settings call is a full AA55 settings read.
+  const { settings, writeSetting } = useInverter()
+  const dod = settings.dod !== undefined && settings.dod !== null ? Number(settings.dod) : null
   const [busy, setBusy] = useState(false)
-  const [sched, setSched] = useState<{ enabled: boolean; threshold_kwh: number; max_soc?: number; charge_cap_soc?: number; charge_cap_active?: boolean; charge_cap_full_every_days?: number; hour_forecast_kwh?: number; producing?: boolean } | null>(null)
+  const [writeError, setWriteError] = useState('')
+  const [sched, setSched] = useState<{ enabled: boolean; threshold_kwh: number; max_soc?: number; charge_cap_soc?: number; charge_cap_active?: boolean; charge_cap_full_every_days?: number; zero_export?: boolean; hour_forecast_kwh?: number; producing?: boolean } | null>(null)
 
   async function refresh() {
-    try {
-      const r = await fetch('/api/settings', { headers })
-      if (r.ok) { const j = await r.json(); if (j.dod !== undefined && j.dod !== null) setDod(Number(j.dod)) }
-    } catch { /* ES read can time out; leave as-is */ }
     try {
       const r = await fetch('/api/battery-schedule', { headers })
       if (r.ok) setSched(await r.json())
@@ -53,12 +53,18 @@ function DischargeControl() {
     refresh()
   }
 
+  async function toggleZeroExport(zero_export: boolean) {
+    setSched(s => s ? { ...s, zero_export } : s)
+    try { await fetch('/api/battery-schedule', { method: 'POST', headers, body: JSON.stringify({ zero_export }) }) }
+    catch { /* ignore */ }
+    refresh()
+  }
+
   async function apply(value: number) {
-    setBusy(true)
-    try {
-      const r = await fetch('/api/settings', { method: 'POST', headers, body: JSON.stringify({ key: 'dod', value }) })
-      if (r.ok) setDod(value)
-    } finally { setBusy(false) }
+    setBusy(true); setWriteError('')
+    try { await writeSetting('dod', value) }
+    catch (e) { setWriteError((e as Error).message) }
+    finally { setBusy(false) }
   }
 
   const floor = dod === null ? null : 100 - dod
@@ -89,6 +95,7 @@ function DischargeControl() {
         <b>Hold</b> sets the floor to 100% — the grid covers the house and the battery is preserved.
         <b> Normal</b> lets the battery power the house down to 20%. (Writes the inverter's on-grid DoD.)
       </p>
+      {writeError && <p className="text-[11px] text-red-400">Write failed — {writeError}</p>}
 
       {/* Auto forecast-driven schedule */}
       <div className="border-t border-gray-800 pt-3 mt-1 space-y-2">
@@ -106,7 +113,7 @@ function DischargeControl() {
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-400">
           <span>Threshold</span>
-          <input type="number" step="0.05" min="0" defaultValue={sched?.threshold_kwh ?? 0.1}
+          <input type="number" step="0.05" min="0" key={sched ? 'loaded' : 'loading'} defaultValue={sched?.threshold_kwh ?? 0.1}
             onBlur={e => setThreshold(parseFloat(e.target.value))}
             className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-right text-white" />
           <span>kWh/h</span>
@@ -119,7 +126,7 @@ function DischargeControl() {
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-400">
           <span>Release hold at</span>
-          <input type="number" step="1" min="50" max="100" defaultValue={sched?.max_soc ?? 100}
+          <input type="number" step="1" min="50" max="100" key={sched ? 'loaded' : 'loading'} defaultValue={sched?.max_soc ?? 100}
             onBlur={e => setMaxSoc(parseFloat(e.target.value))}
             className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-right text-white" />
           <span>% SoC</span>
@@ -129,17 +136,36 @@ function DischargeControl() {
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-400">
           <span><BatteryCharging size={12} className="inline mr-1" />Stop charging at</span>
-          <input type="number" step="1" min="0" max="95" defaultValue={sched?.charge_cap_soc ?? 0}
+          <input type="number" step="1" min="0" max="95" key={sched ? 'loaded' : 'loading'} defaultValue={sched?.charge_cap_soc ?? 0}
             onBlur={e => setChargeCap(parseFloat(e.target.value))}
             className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-right text-white" />
           <span>% SoC (0 = off)</span>
           <span className="ml-auto text-gray-500">
             {sched?.charge_cap_soc
-              ? <>brakes charging at the cap, releases at {sched.charge_cap_soc - 5}% — surplus exports instead
+              ? <>brakes charging at the cap, releases at {sched.charge_cap_soc - 5}% — surplus {sched.zero_export ? 'is curtailed (lost)' : 'exports'} instead
                   {sched.charge_cap_active && <b className="text-amber-400"> · brake active</b>}</>
               : 'off — battery charges to 100%'}
           </span>
         </div>
+        <div className="flex items-start justify-between gap-3 pt-1">
+          <div>
+            <div className="text-sm text-gray-200 flex items-center gap-2"><Ban size={14} /> Zero export</div>
+            <div className="text-[11px] text-gray-500 mt-0.5">
+              Keeps the grid export limit at 0 W — solar the house and battery can't use is curtailed,
+              never sent to the grid. Alerts (Telegram) if export persists.
+            </div>
+          </div>
+          <button onClick={() => toggleZeroExport(!sched?.zero_export)}
+            className={`relative inline-flex w-11 h-6 rounded-full transition-colors shrink-0 ${sched?.zero_export ? 'bg-amber-500' : 'bg-gray-700'}`}>
+            <span className={`inline-block w-4 h-4 bg-white rounded-full shadow transform transition-transform mt-1 ${sched?.zero_export ? 'translate-x-6' : 'translate-x-1'}`} />
+          </button>
+        </div>
+        {sched?.zero_export && !!sched.charge_cap_soc && (
+          <p className="text-[11px] text-amber-400 leading-relaxed">
+            With zero export, charging stopped by the cap above is solar thrown away. Set the cap to 0
+            (off) unless you deliberately trade that energy for battery longevity.
+          </p>
+        )}
       </div>
     </div>
   )
@@ -154,6 +180,15 @@ function DischargeControl() {
  * these via SEMS Plus / SolarGo, not here — this card is just so you can
  * eyeball drift against the manufacturer spec without opening another app.
  */
+function ConfigRow({ label, value, unit }: { label: string; value?: number; unit: string }) {
+  return (
+    <div className="flex items-center justify-between py-1.5 border-b border-gray-800 last:border-0">
+      <span className="text-xs text-gray-500">{label}</span>
+      <span className="text-sm text-white">{value !== undefined ? `${value} ${unit}` : '—'}</span>
+    </div>
+  )
+}
+
 function BatteryConfig() {
   const { settings, loadSettings } = useInverter()
   useEffect(() => { loadSettings() }, [])
@@ -166,13 +201,6 @@ function BatteryConfig() {
 
   if (capacity === undefined && chargeV === undefined) return null
 
-  const Row = ({ label, value, unit }: { label: string; value?: number; unit: string }) => (
-    <div className="flex items-center justify-between py-1.5 border-b border-gray-800 last:border-0">
-      <span className="text-xs text-gray-500">{label}</span>
-      <span className="text-sm text-white">{value !== undefined ? `${value} ${unit}` : '—'}</span>
-    </div>
-  )
-
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
       <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-1 flex items-center gap-2">
@@ -181,11 +209,11 @@ function BatteryConfig() {
       <p className="text-[11px] text-gray-500 mb-3 leading-relaxed">
         BMS commissioning profile — change via SEMS Plus/SolarGo, not here.
       </p>
-      <Row label="Capacity" value={capacity} unit="Ah" />
-      <Row label="Charge Voltage" value={chargeV} unit="V" />
-      <Row label="Charge Current" value={chargeI} unit="A" />
-      <Row label="Discharge Voltage" value={dischargeV} unit="V" />
-      <Row label="Discharge Current" value={dischargeI} unit="A" />
+      <ConfigRow label="Capacity" value={capacity} unit="Ah" />
+      <ConfigRow label="Charge Voltage" value={chargeV} unit="V" />
+      <ConfigRow label="Charge Current" value={chargeI} unit="A" />
+      <ConfigRow label="Discharge Voltage" value={dischargeV} unit="V" />
+      <ConfigRow label="Discharge Current" value={dischargeI} unit="A" />
     </div>
   )
 }

@@ -11,7 +11,13 @@ Charge cap: `charge_cap_soc` (0 = disabled) brakes ALL battery charging
 (charge current → 0 via the dedicated AA55 0x0351 command, confirmed working
 on this ES 2026-07-30 — see inverter_io.py) once SoC reaches it, and
 releases (restores `charge_cap_release_current`) at `charge_cap_soc` - 5.
-Surplus PV exports while braked. ≤2 writes/day, flash-safe.
+Surplus PV exports while braked (or is curtailed under zero export — then the
+cap throws solar away, so leave it off). ≤2 writes/day, flash-safe.
+
+Zero export: `zero_export` keeps the grid export limit at 0 W with the limit
+switch on, so surplus that neither the house nor the battery can take is
+curtailed instead of exported. Checked once when enabled / at startup, then
+only re-read when the polled grid power shows sustained export.
 
 BMS maintenance: LFP SoC estimation drifts without periodic full charges, so
 every `charge_cap_full_every_days` days (0 = never) the cap is skipped for a
@@ -54,6 +60,8 @@ class BatterySchedule:
                                               # but misleading.
     charge_cap_full_every_days:  int   = 14   # skip the cap this often for a 100%
                                               # BMS-balancing charge (0 = never)
+    zero_export:  bool  = False  # keep grid export limit at 0 W (switch on) and
+                                 # watch for export; no feed-in pay → never export
     # ── scheduler state (persisted, not user settings) ──
     charge_cap_active:     bool = False  # True while the brake is applied
     charge_cap_last_full:  str  = ""     # ISO date of last completed 100% charge

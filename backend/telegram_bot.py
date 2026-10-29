@@ -278,7 +278,24 @@ def _auto_buttons() -> tuple[str, list]:
 
 
 # ── Chart generation (matplotlib, lazy import) ──────────────────────────────────
-def _chart_power() -> bytes | None:
+async def _chart(kind: str) -> bytes | None:
+    """Rows are read here, on the event loop (the shared SQLite connection is
+    not for concurrent threads); matplotlib renders in a worker thread so a
+    chart never stalls the loop — and with it an in-flight AA55 read."""
+    if kind == "chart":
+        return await asyncio.to_thread(_chart_power, _db.get_history("today"))
+    rows = _db.get_history("7d")[::-1]
+    load = []
+    for r in rows:
+        v = float(r.get("e_load_day", 0) or 0)
+        if v <= 0:   # no load figure for that day yet — derive from snapshots
+            _, dst = _day_flows(str(r.get("ts", ""))[:10])
+            v = float(dst.get("load", 0) or 0)
+        load.append(v)
+    return await asyncio.to_thread(_chart_energy, rows, load)
+
+
+def _chart_power(rows: list[dict]) -> bytes | None:
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -286,7 +303,6 @@ def _chart_power() -> bytes | None:
     except Exception as e:
         log.warning("matplotlib unavailable: %s", e)
         return None
-    rows = _db.get_history("today")
     if not rows:
         return None
     xs = list(range(len(rows)))
@@ -315,25 +331,17 @@ def _chart_power() -> bytes | None:
     return buf.getvalue()
 
 
-def _chart_energy() -> bytes | None:
+def _chart_energy(rows: list[dict], load: list[float]) -> bytes | None:
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except Exception:
         return None
-    rows = list(reversed(_db.get_history("7d")))
     if not rows:
         return None
     labels = [str(r.get("ts", ""))[5:10] for r in rows]
     solar  = [float(r.get("e_day", 0) or 0) for r in rows]
-    load   = []
-    for r in rows:
-        v = float(r.get("e_load_day", 0) or 0)
-        if v <= 0:   # ES load counter reads 0 — derive from snapshots
-            _, dst = _day_flows(str(r.get("ts", ""))[:10])
-            v = float(dst.get("load", 0) or 0)
-        load.append(v)
     x = range(len(rows))
     fig, ax = plt.subplots(figsize=(8, 3.5), dpi=110)
     fig.patch.set_facecolor("#0a0f1e"); ax.set_facecolor("#0a0f1e")
@@ -372,9 +380,9 @@ def _report_text() -> str:
         f"♻️ Self-sufficiency: <b>{self_suff:.0f}%</b>",
     ]
     try:
-        from tariffs import load_tariffs, calc_financials
-        t = load_tariffs()
-        fin = calc_financials(t, e_imp=gimp, e_exp=gexp, e_solar=solar, e_load=load, e_bat_dis=bdis)
+        from tariffs import load_tariffs, day_financials
+        # Same pricing as the Finance page (TOU per hour, battery counted once).
+        fin = day_financials(load_tariffs(), _db.get_today_summary())
         cur = fin.get("currency", "€")
         lines += [
             "",
@@ -389,13 +397,8 @@ def _report_text() -> str:
 
 def _cost_text() -> str:
     try:
-        from tariffs import load_tariffs, calc_financials
-        f = _db.get_energy_flow(None)
-        s, dst = f.get("sources", {}), f.get("destinations", {})
-        t = load_tariffs()
-        fin = calc_financials(t, e_imp=s.get("grid", 0), e_exp=dst.get("grid", 0),
-                              e_solar=s.get("solar", 0), e_load=dst.get("load", 0),
-                              e_bat_dis=s.get("battery", 0))
+        from tariffs import load_tariffs, day_financials
+        fin = day_financials(load_tariffs(), _db.get_today_summary())
         cur = fin.get("currency", "€")
         return (
             f"<b>💶 Today</b>\n"
@@ -489,7 +492,7 @@ async def _handle_command(token: str, chat_id: str | int, text: str):
         else:
             await _send(token, chat_id, "Usage: /export &lt;watts&gt;  e.g. /export 3000")
     elif cmd in ("chart", "energychart"):
-        png = _chart_power() if cmd == "chart" else _chart_energy()
+        png = await _chart("chart" if cmd == "chart" else "energy")
         if png:
             await _send_photo(token, chat_id, png)
         else:
@@ -515,7 +518,6 @@ async def _handle_callback(token: str, chat_id: str | int, cb_id: str, cdata: st
     if cdata == "refresh" and message_id:
         await _edit(token, chat_id, message_id, _status_text(), _status_kb()); return
     if cdata == "status":   await _send(token, chat_id, _status_text(), _status_kb())
-    elif cdata == "battery":  await _send(token, chat_id, _battery_text())
     elif cdata == "flow":     await _send(token, chat_id, _flow_text())
     elif cdata == "report":   await _send(token, chat_id, _report_text(), _main_menu())
     elif cdata == "history":  await _send(token, chat_id, _history_text())
@@ -523,7 +525,7 @@ async def _handle_callback(token: str, chat_id: str | int, cb_id: str, cdata: st
     elif cdata == "hold":     await _send(token, chat_id, await _set_dod(0), _main_menu())
     elif cdata == "normal":   await _send(token, chat_id, await _set_dod(80), _main_menu())
     elif cdata == "chart":
-        png = _chart_power()
+        png = await _chart("chart")
         await (_send_photo(token, chat_id, png) if png else _send(token, chat_id, "No data yet."))
     elif cdata == "mode":
         await _send(token, chat_id, "Pick a work mode:", _mode_buttons())

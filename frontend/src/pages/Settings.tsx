@@ -948,6 +948,7 @@ export default function Settings() {
   const [local, setLocal] = useState<Record<string, unknown>>({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState('')
 
   useEffect(() => { loadSettings() }, [])
   useEffect(() => { setLocal(settings) }, [settings])
@@ -955,11 +956,17 @@ export default function Settings() {
   function set(k: string, v: unknown) { setLocal(prev => ({ ...prev, [k]: v })) }
 
   async function save() {
-    setSaving(true)
+    setSaving(true); setSaveError('')
+    const failed: string[] = []
     for (const [k, v] of Object.entries(local)) {
-      if (v !== settings[k]) await writeSetting(k, v)
+      if (v === settings[k]) continue
+      try { await writeSetting(k, v, false) }
+      catch (e) { failed.push((e as Error).message) }
     }
-    setSaving(false); setSaved(true)
+    await loadSettings()          // one AA55 settings read, not one per key
+    setSaving(false)
+    if (failed.length) { setSaveError(failed.join(' · ')); return }
+    setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
 
@@ -1003,6 +1010,11 @@ export default function Settings() {
           {saved ? 'Saved!' : 'Apply Changes'}
         </button>
       </div>
+      {saveError && (
+        <div className="bg-red-950/40 border border-red-800 text-red-300 text-xs rounded-lg px-3 py-2">
+          Write failed — {saveError}
+        </div>
+      )}
 
       <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 flex gap-3 text-sm text-amber-300">
         <AlertCircle size={16} className="shrink-0 mt-0.5" />
@@ -1047,13 +1059,15 @@ export default function Settings() {
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
           <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Export & Power Control</h2>
           <div className="grid grid-cols-2 gap-3">
-            <GridSetting label="Export Limit" desc="Max export, 0=off">
+            <GridSetting label="Export Limit" desc="Max export, 0 = zero export">
               <NumInput value={(local.grid_export_limit as number) ?? 0} onChange={v => set('grid_export_limit', v)} min={0} max={15000} unit="W" />
             </GridSetting>
             <GridSetting label="EMS Power Limit" desc="Max EMS charge power">
               <NumInput value={(local.ems_power_limit as number) ?? 0} onChange={v => set('ems_power_limit', v)} min={0} max={15000} unit="W" />
             </GridSetting>
-            <GridSetting label="Grid Export" desc="Allow grid export">
+            {/* ON = the limit above is ENFORCED; off = no limit, export freely.
+                (Inverter field grid_export, written via AA55 0x0353.) */}
+            <GridSetting label="Enforce Export Limit" desc="Off = unlimited export">
               <Toggle checked={!!(local.grid_export)} onChange={v => set('grid_export', v)} />
             </GridSetting>
             <GridSetting label="Shadow Scan" desc="MPPT shade scan">

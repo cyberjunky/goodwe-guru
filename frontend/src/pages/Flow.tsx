@@ -25,6 +25,8 @@ function shiftDate(date: string, days: number) {
 }
 
 /** Coloured Sankey ribbon, tinted by its source node. */
+// Recharts clones <FlowLink /> and injects its (untyped in v2) props at render.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function FlowLink(props: any) {
   const { sourceX, sourceY, sourceControlX, targetControlX, targetX, targetY, linkWidth, payload } = props
   const c = COLOR[payload?.source?.name?.trim()] ?? '#64748b'
@@ -37,6 +39,7 @@ function FlowLink(props: any) {
 }
 
 /** Coloured Sankey node (label drawn beside it). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function FlowNode(props: any) {
   const { x, y, width, height, payload, containerWidth } = props
   const c = COLOR[payload.name?.trim()] ?? '#64748b'
@@ -62,10 +65,15 @@ export default function Flow() {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
+    // Abort on date change: stepping through days quickly must not let a
+    // slower, older response overwrite the newer day.
+    const ctl = new AbortController()
     setLoading(true)
-    fetch(`/api/energy-flow?date=${date}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json()).then(setFlow).catch(() => setFlow(null))
-      .finally(() => setLoading(false))
+    fetch(`/api/energy-flow?date=${date}`, { headers: { Authorization: `Bearer ${token}` }, signal: ctl.signal })
+      .then(r => r.ok ? r.json() : null).then(setFlow)
+      .catch(e => { if (e.name !== 'AbortError') setFlow(null) })
+      .finally(() => { if (!ctl.signal.aborted) setLoading(false) })
+    return () => ctl.abort()
   }, [date, token])
 
   const L = flow?.links ?? {}

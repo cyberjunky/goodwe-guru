@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { BarChart2, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid,
   ComposedChart, Line, ReferenceArea } from 'recharts'
@@ -21,8 +21,11 @@ function DayDetail() {
   const [series, setSeries] = useState<DayPoint[]>([])
 
   useEffect(() => {
-    fetch(`/api/history/day?date=${date}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json()).then(j => setSeries(j.series ?? [])).catch(() => setSeries([]))
+    const ctl = new AbortController()   // a slower older response must not win
+    fetch(`/api/history/day?date=${date}`, { headers: { Authorization: `Bearer ${token}` }, signal: ctl.signal })
+      .then(r => r.ok ? r.json() : { series: [] }).then((j: { series?: DayPoint[] }) => setSeries(j.series ?? []))
+      .catch(e => { if (e.name !== 'AbortError') setSeries([]) })
+    return () => ctl.abort()
   }, [date, token])
 
   // Group consecutive same-state buckets into background bands (skip idle).
@@ -95,7 +98,7 @@ function EnergyTooltip({ active, payload }: { active?: boolean; payload?: Toolti
   )
 }
 
-type Range = 'today' | '7d' | '30d' | '12m'
+type Range = '7d' | '30d' | '12m'   // a single day: see Day Detail below
 
 interface HistoryEntry {
   ts: string
@@ -108,19 +111,23 @@ export default function History() {
   const [data, setData] = useState<HistoryEntry[]>([])
   const [loading, setLoading] = useState(false)
 
+  const seq = useRef(0)   // only the latest request may set state (range clicks race)
   useEffect(() => { fetchData() }, [range])
 
   async function fetchData() {
+    const my = ++seq.current
     setLoading(true)
+    let rows: HistoryEntry[] = []
     try {
       const token = localStorage.getItem('gw_token') ?? ''
       const res = await fetch(`/api/history?range=${range}`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-      if (!res.ok) { setData([]); return }
-      setData(await res.json())
-    } catch { setData([]) }
-    finally { setLoading(false) }
+      if (res.ok) rows = await res.json()
+    } catch { /* keep [] */ }
+    if (my !== seq.current) return
+    setData(rows)
+    setLoading(false)
   }
 
   const totals = data.reduce((acc, d) => ({
@@ -133,7 +140,6 @@ export default function History() {
   }), { yield: 0, export: 0, import: 0, load: 0, batCharge: 0, batDischarge: 0 })
 
   const RANGES: { key: Range; label: string }[] = [
-    { key: 'today', label: 'Today' },
     { key: '7d', label: '7 Days' },
     { key: '30d', label: '30 Days' },
     { key: '12m', label: '12 Months' },

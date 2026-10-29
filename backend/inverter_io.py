@@ -10,7 +10,8 @@ through the proper methods here so there is ONE place that knows the mapping.
 Confirmed on ES (platform 105):
   - set_operation_mode(OperationMode)      work mode actually sticks
   - set_ongrid_battery_dod(dod)            depth-of-discharge floor (0 = no discharge)
-  - set_grid_export_limit(watts)
+  - set_grid_export_limit(watts)           AA55 0x0335 (0 W confirmed 2026-10-29)
+  - "grid_export" switch                   AA55 0x0353, from SolarGo (see below)
 
 Capping battery CHARGE was long believed impossible on this ES — the
 ECO_CHARGE eco_mode_soc target (ignored by EcoModeV1 firmware), an eco
@@ -21,10 +22,10 @@ owner's GW3648D-ES) is the dedicated AA55 command 0x0351 "set battery
 charge parameters", reverse-engineered from the SolarGo app — same
 precedent as set_ongrid_battery_dod (0x0560): the dedicated command
 works, the generic register write doesn't. Routed below as "charge_i"
-(0 = brake, stops ALL charging incl. PV surplus). Read-back of the
-register may differ from the written value (BMS-negotiated, drifts on
-its own) — that's normal; a clean command ack means success. See
-CLAUDE.md 2026-07-30.
+(0 = brake, stops ALL charging incl. PV surplus). The BMS clamps the
+value to its own ceiling (runtime `battery_charge_limit`), so a read-back
+lower than what was written is the clamp, not a lost write. See CLAUDE.md
+2026-07-30 / 2026-08-04.
 """
 
 import asyncio
@@ -101,6 +102,11 @@ async def _apply_setting_locked(inverter, key: str, value) -> str:
         mode = _OPMODE.get(int(value))
         if mode is None:
             raise ValueError(f"Unknown work mode {value}")
+        if (inverter.__class__.__name__ == "ES"
+                and mode in (OperationMode.PEAK_SHAVING, OperationMode.SELF_USE)):
+            # The library's ES set_operation_mode has no branch for SELF_USE
+            # and would return without sending anything — a fake success.
+            raise ValueError(f"{mode.name} is not supported on ES firmware")
         await inverter.set_operation_mode(mode)
         return f"operation mode → {mode.name}"
 
@@ -146,6 +152,17 @@ async def _apply_setting_locked(inverter, key: str, value) -> str:
     if key == "grid_export_limit":
         await inverter.set_grid_export_limit(int(value))
         return f"grid export limit → {int(value)} W"
+
+    if key == "grid_export":
+        # Export-limit on/off switch (settings offset 18, 1 = limit enforced).
+        # The library only sends the limit VALUE (0x0335); SolarGo toggles the
+        # switch with the dedicated AA55 0x0353 "BackflowPrevention" command
+        # (DataCollectUtil.buildPackage case 57, reply 0x03D3). A generic
+        # write_setting to offset 18 is the silently-ignored class on ES.
+        from goodwe.protocol import Aa55ProtocolCommand
+        on = 1 if int(value) else 0
+        await inverter._read_from_socket(Aa55ProtocolCommand(f"035301{on:02x}", "03d3"))
+        return f"export limit {'enabled' if on else 'disabled'}"
 
     # Everything else still goes through the generic register write.
     await inverter.write_setting(key, value)

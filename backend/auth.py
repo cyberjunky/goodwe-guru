@@ -1,7 +1,6 @@
 """JWT token creation and verification."""
 
 import time
-from typing import Optional
 
 import jwt
 

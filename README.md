@@ -21,6 +21,10 @@ A self-hosted web dashboard for monitoring and controlling GoodWe inverters and 
 - **Forecast-driven auto-hold** — holds the battery while the hourly solar forecast
   is above a configurable threshold (kWh), discharges below it; re-checked every
   5 min against the cached forecast (timezone-aware), ~2 inverter writes/day
+- **Zero export** (Battery page) — keeps the grid export limit at 0 W with the
+  limit switch on: the house uses solar first, the battery takes the surplus, and
+  whatever is left is curtailed instead of fed in. Telegram alert if export
+  persists. For when you get nothing (or pay) for feed-in.
 - All inverter writes go through the goodwe library's dedicated methods
   (`set_operation_mode`, `set_ongrid_battery_dod`, `set_grid_export_limit`), which
   is what actually sticks on the ES (raw register writes are silently ignored)
@@ -38,14 +42,12 @@ A self-hosted web dashboard for monitoring and controlling GoodWe inverters and 
 | DRED / PEN relay / unbalanced output | ✗ | ✅ |
 
 ### Automations — rule-based inverter control
-Emulate Self-Use mode (missing on the ES series) and any custom behaviour:
-- **Zero export while charging** — export limit = 0 until SoC target, so solar
-  goes into the battery first (does NOT cap charging — see note below)
+Custom behaviour beyond the Battery page (on ES, General mode already does
+self-use — solar → house → battery → grid):
 - **Min SoC floor** — ECO charge when battery drops below Y% (overnight reserve;
   best-effort boost, may overshoot the target — see note below)
 - **Pre-evening boost** — charge to target SoC before dark so you coast through the night
 - **Peak shaving** — start discharging when grid import exceeds W
-- **Smart Self-Use set** — 4 rules in one click (combines all of the above)
 - Built-in **hysteresis** prevents oscillation at thresholds (configurable dead band)
 - Rules fire every 30 s, optional Telegram notification on each trigger
 
@@ -179,7 +181,7 @@ Via the [goodwe Python library](https://github.com/mletenay/home-assistant-goodw
 
 | Platform | Series | Notes |
 |---|---|---|
-| 105 (ES/EM/BP) | ES 3–10K, EM, BP | No EMS modes, no Self-Use (emulated via Automations) |
+| 105 (ES/EM/BP) | ES 3–10K, EM, BP | No EMS modes, no Self-Use mode (General already self-consumes) |
 | 205/745 (ET/EH/BT/BH/GE) | ET 5–50K, EH 3.6K | Full EMS + Self-Use (mode 5) native |
 | Grid-tied | XS, DNS, SDT, GT, HT, UT | Monitoring only |
 

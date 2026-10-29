@@ -171,7 +171,8 @@ export default function Dashboard() {
       </div>
 
       {/* ── 4 metric cards ─────────────────────────────────────────── */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10 }}>
+      {/* auto-fit: 4 across on desktop, 2 on a phone — no breakpoints needed */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))', gap:10 }}>
         <MetricCard
           label="Solar" value={(ppv/1000).toFixed(2)} unit="kW"
           sub={`${eDay.toFixed(2)} kWh today`} color={T.solar} icon={<Sun size={15}/>}
@@ -196,7 +197,9 @@ export default function Dashboard() {
       </div>
 
       {/* ── Main row: flow + panels ─────────────────────────────────── */}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+      {/* Side by side when there's room; stacked on phones so the flow canvas
+          isn't squeezed to ~170 px. */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(min(100%, 420px), 1fr))', gap:12 }}>
 
         {/* Energy flow */}
         <EnergyFlow ppv={ppv} pbattery={pbat} pgrid={pgrid} pload={pload} soc={soc} deviceTrackedW={deviceTrackedW}/>

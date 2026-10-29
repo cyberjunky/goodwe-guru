@@ -16,7 +16,8 @@ Key platform constraints — always keep these in mind:
   raw `write_setting('work_mode', …)` reports success but the inverter reverts it
   (and `write_setting('dod', …)` isn't even encodable). Route everything through
   `backend/inverter_io.apply_setting()`, which maps: `work_mode`→`set_operation_mode`,
-  `dod`→`set_ongrid_battery_dod`, `grid_export_limit`→`set_grid_export_limit`.
+  `dod`→`set_ongrid_battery_dod`, `grid_export_limit`→`set_grid_export_limit`,
+  `grid_export`→AA55 0x0353, `charge_i`→AA55 0x0351.
 - ES uses AA55 protocol (not Modbus TCP); reads occasionally time out — retry.
 - **All inverter I/O is serialized through `inverter_io.inverter_lock`** (an
   `asyncio.Lock`). The AA55/UDP stack is a small embedded implementation with
@@ -99,6 +100,26 @@ dump of every settings + runtime field, for exactly this kind of question).
 The 0xB9B9/0xB9BA "Force Charge / SoC upper limit" registers are a
 boost-to-target feature, confirmed NOT a cap (git 8df99ee9).
 **Integrated the same day** as the scheduler charge cap (see above).
+
+**Zero export (since 2026-10-29).** The owner gets nothing for feed-in, so the
+grid export limit is kept at **0 W** (confirmed live on the GW3648D-ES: written
+via `set_grid_export_limit` = dedicated AA55 **0x0335**, read back 0). ES General
+mode already self-consumes (solar → house → battery → grid, no grid charging),
+so with the limit at 0 the remainder is curtailed, not exported. Two fields:
+
+- `grid_export_limit` (settings offset 52, W) — the value, via 0x0335.
+- `grid_export` (offset 18) — the limit ON/OFF switch, **1 = limit enforced**.
+  The library has no writer for it; SolarGo uses AA55 **0x0353**
+  "BackflowPrevention" (`035301 01` on / `00` off, reply `03D3`; decompiled
+  `DataCollectUtil.buildPackage` case 57). Routed as `grid_export` in
+  `apply_setting`. It was already 1 on this inverter — the "missing setting" was
+  just the limit sitting at 6000 W (> the 3.6 kW rating, i.e. never reached).
+The scheduler's `zero_export` flag (Battery page) re-checks both once on enable /
+startup, then only reads them back after polled `pgrid` shows > 150 W export
+for 3 consecutive 5-min checks — drifted → re-send; correct → alert only.
+With zero export the **charge cap wastes solar** (braked surplus is curtailed,
+not exported) — the Battery page warns when both are on. The old automation
+templates that toggled the export limit (and restored 6000 W at full SoC) are gone.
 
 **A short discharge while "held" is normal, not a failed write.** When PV sits
 just under the house load the inverter's regulation loop hunts around the
@@ -244,6 +265,18 @@ charge/discharge is derived from the **energy balance** (`solar + pgrid - load`)
 NOT `pbattery1`'s sign — robust regardless of platform sign quirks. The same
 balance drives `get_day_series()` (the History Day-Detail chart's battery-state
 track). ES lacks `e_day_imp/exp`, so this is how import/export/flows are obtained.
+
+**Persisted per day (since 2026-10-29):** `main.energy_deriver` runs
+`db.update_derived()` for today + yesterday every 5 min (and backfills every day
+that still has snapshots at startup — raw snapshots are pruned after 7 days).
+It MAX-merges import/export/load/battery-charge/discharge into `daily_summary`
+plus `imp_by_hour` (24 local-hour import buckets, JSON) for time-of-use pricing.
+The poll loop fills the live `e_day_imp/exp`, `e_load_day`, `e_bat_*_day` and
+`e_total_imp/exp` (lifetime SUM since tracking began) from that, only where the
+inverter reports 0. **All dates are LOCAL** (rows before 2026-10-29 were UTC).
+Money: always via `tariffs.day_financials(t, row)` (Finance API, payback,
+Telegram) — TOU priced per hour when `imp_by_hour` exists, else the 24 h mean
+rate; battery-routed solar is valued once (on discharge), not also as direct use.
 
 ## Future work (planned)
 

@@ -29,51 +29,8 @@ _FILE = Path(cfg.db_path).parent / "automations.json"
 # Data model
 # ─────────────────────────────────────────────────────────────────────────────
 
-SENSORS = {
-    "battery_soc":    "Battery SoC",
-    "ppv":            "Solar Power (W)",
-    "pgrid":          "Grid Power (W)",
-    "pbattery":       "Battery Power (W)",
-    "load_ptotal":    "Home Load (W)",
-    "temperature":    "Inverter Temp (°C)",
-    "battery_temperature": "Battery Temp (°C)",
-    "fgrid":          "Grid Frequency (Hz)",
-}
-
-OPERATORS = {
-    "gt":      ">",
-    "lt":      "<",
-    "gte":     "≥",
-    "lte":     "≤",
-    "eq":      "=",
-    "between": "between",
-}
-
-ACTION_TYPES = {
-    "set_work_mode":    "Set Work Mode",
-    "set_dod":          "Set Depth-of-Discharge (battery floor)",
-    "write_setting":    "Write Setting",
-    "eco_charge":       "Start ECO Charge (all day)",
-    "eco_discharge":    "Start ECO Discharge (all day)",
-    "set_general_mode": "Switch to General Mode",
-    "notify":           "Send Telegram Notification",
-}
-
-
-@dataclass
-class Condition:
-    sensor:  str   = "battery_soc"
-    op:      str   = "gte"
-    value:   float = 80.0
-    value2:  float = 0.0     # upper bound for 'between'
-
-
-@dataclass
-class Action:
-    type:    str = "write_setting"
-    setting: str = ""          # for write_setting / set_work_mode
-    value:   Any = None        # value to write
-    message: str = ""          # for notify
+# Sensor, operator and action lists live in the frontend (Automations.tsx);
+# _eval_condition / _execute_action below are the source of truth.
 
 
 @dataclass
@@ -276,7 +233,7 @@ async def run_loop(get_data, get_inverter):
             continue
         try:
             autos    = load()
-            changed  = False
+            fired: dict[str, Automation] = {}
             now      = time.time()
             inverter = get_inverter()
 
@@ -287,7 +244,7 @@ async def run_loop(get_data, get_inverter):
                     continue
                 if check(a, data):
                     log.info("Automation '%s' triggered (count=%d)", a.name, a.trigger_count + 1)
-                    results = []
+                    results, failures = [], 0
                     for act in a.actions:
                         try:
                             r = await execute(act, inverter, f"automation “{a.name}”")
@@ -295,14 +252,21 @@ async def run_loop(get_data, get_inverter):
                         except Exception as e:
                             log.error("Automation action error: %s", e)
                             results.append(f"error: {e}")
-                    a.last_triggered  = now
-                    a.trigger_count  += 1
-                    # Record sensor values at trigger time for hysteresis tracking
-                    a.last_trigger_values = {
-                        c["sensor"]: float(data.get(c["sensor"], 0))
-                        for c in a.conditions if "sensor" in c
-                    }
-                    changed = True
+                            failures += 1
+                    # Cooldown always applies (no tight retry against the fragile
+                    # AA55 stack), but a rule whose every action failed did not
+                    # really fire: arming hysteresis would block the retry until
+                    # the sensor moved back — e.g. a min-SoC rule never retrying
+                    # while SoC keeps falling.
+                    a.last_triggered = now
+                    if failures < len(a.actions):
+                        a.trigger_count += 1
+                        # Record sensor values at trigger time for hysteresis tracking
+                        a.last_trigger_values = {
+                            c["sensor"]: float(data.get(c["sensor"], 0))
+                            for c in a.conditions if "sensor" in c
+                        }
+                    fired[a.id] = a
 
                     # Telegram summary of trigger
                     try:
@@ -315,8 +279,18 @@ async def run_loop(get_data, get_inverter):
                     except Exception:
                         pass
 
-            if changed:
-                save(autos)
+            if fired:
+                # Actions await inverter_lock and Telegram (tens of seconds);
+                # a rule edited, disabled or deleted meanwhile must not be
+                # overwritten — reload and merge only the run-time fields.
+                current = load()
+                for c in current:
+                    f = fired.get(c.id)
+                    if f:
+                        c.last_triggered      = f.last_triggered
+                        c.trigger_count       = f.trigger_count
+                        c.last_trigger_values = f.last_trigger_values
+                save(current)
         except Exception as e:
             log.error("Automation loop error: %s", e)
 
@@ -326,28 +300,6 @@ async def run_loop(get_data, get_inverter):
 # ─────────────────────────────────────────────────────────────────────────────
 
 TEMPLATES = [
-    {
-        "id":          "tpl_max_soc",
-        "name":        "Max SoC Limit (does NOT stop charging)",
-        "description": "⚠️ Switches to General mode above the target SoC — but General "
-                       "mode is usually already the active mode, so this is a near no-op. "
-                       "There is NO way on this ES firmware to actually cap/stop battery "
-                       "charging from solar surplus (every mechanism tried — eco-mode SoC "
-                       "target, charge-current limit, force-charge target — is confirmed "
-                       "silently ignored or inapplicable to solar charging). Kept for "
-                       "compatibility; don't rely on this to protect the battery.",
-        "logic":       "AND",
-        "conditions":  [{"sensor": "battery_soc", "op": "gte", "value": 80, "value2": 0}],
-        "actions":     [
-            {"type": "write_setting", "setting": "work_mode", "value": 0,
-             "message": ""},
-        ],
-        "cooldown":    10,
-        "params":      [
-            {"key": "conditions.0.value", "label": "Max SoC (%)", "type": "number",
-             "min": 50, "max": 99, "default": 80},
-        ],
-    },
     {
         "id":          "tpl_min_soc",
         "name":        "Min SoC Floor",
@@ -366,21 +318,6 @@ TEMPLATES = [
              "min": 5, "max": 50, "default": 20},
             {"key": "actions.0.soc", "label": "Hold SoC at (%)", "type": "number",
              "min": 5, "max": 60, "default": 20},
-        ],
-    },
-    {
-        "id":          "tpl_self_use",
-        "name":        "Self-Use Emulation (ES)",
-        "description": "Creates two automations: a min SoC floor (default 15%, real — "
-                       "on-grid DoD works reliably) and a 'max SoC' rule that switches to "
-                       "General mode above 90% — this does NOT actually stop charging (no "
-                       "mechanism on this ES firmware can cap solar-surplus charging). "
-                       "Between these the inverter runs General mode's normal self-use logic.",
-        "multi":       True,   # creates multiple automations
-        "params":      [
-            {"key": "max_soc", "label": "Max SoC (%)",  "type": "number", "min": 60, "max": 99, "default": 90},
-            {"key": "min_soc", "label": "Min SoC (%)",  "type": "number", "min": 5,  "max": 40, "default": 15},
-            {"key": "cooldown","label": "Cooldown (min)","type": "number", "min": 1,  "max": 60, "default": 10},
         ],
     },
     {
@@ -431,9 +368,9 @@ TEMPLATES = [
     {
         "id":          "tpl_pre_evening",
         "name":        "Pre-Evening Charge Boost",
-        "description": "If the battery is below a target SoC before a set hour "
-                       "(e.g. 16:00), force-charge it so you can get through the night "
-                       "without grid imports. Pair with Min SoC Floor to protect the reserve. "
+        "description": "Force-charge (ECO, from the grid if solar is short) whenever the "
+                       "battery is below a target SoC, so you get through the night. It has "
+                       "NO time-of-day condition — add one or it fires at any hour. Pair with Min SoC Floor to protect the reserve. "
                        "Note: the SoC target is a best-effort ECO-mode boost, not a hard "
                        "stop — it may keep charging (from grid if needed) past the target.",
         "logic":       "AND",
@@ -451,69 +388,6 @@ TEMPLATES = [
              "type": "number", "min": 50, "max": 100, "default": 85},
             {"key": "actions.0.soc", "label": "Charge to SoC (%)",
              "type": "number", "min": 50, "max": 100, "default": 85},
-        ],
-    },
-    {
-        "id":          "tpl_zero_export",
-        "name":        "Zero Export While Charging",
-        "description": "Set grid export limit to 0 W while the battery is not yet full, "
-                       "so solar goes into the battery first. Restore normal export limit "
-                       "once battery exceeds target SoC.",
-        "logic":       "AND",
-        "conditions":  [{"sensor": "battery_soc", "op": "lt", "value": 90, "value2": 0}],
-        "actions":     [
-            {"type": "write_setting", "setting": "grid_export_limit", "value": 0, "message": ""},
-        ],
-        "cooldown":    10,
-        "params":      [
-            {"key": "conditions.0.value", "label": "Keep export=0 until SoC (%)",
-             "type": "number", "min": 50, "max": 100, "default": 90},
-        ],
-    },
-    {
-        "id":          "tpl_restore_export",
-        "name":        "Restore Export When Battery Full",
-        "description": "Companion to Zero Export — re-enables grid export once the battery "
-                       "reaches the target SoC. Pair both rules together.",
-        "logic":       "AND",
-        "conditions":  [{"sensor": "battery_soc", "op": "gte", "value": 90, "value2": 0}],
-        "actions":     [
-            {"type": "write_setting", "setting": "grid_export_limit", "value": 6000, "message": ""},
-            {"type": "set_general_mode", "setting": "", "value": None, "message": ""},
-        ],
-        "cooldown":    10,
-        "params":      [
-            {"key": "conditions.0.value",   "label": "Re-enable export at SoC (%)",
-             "type": "number", "min": 60, "max": 100, "default": 90},
-            {"key": "actions.0.value",      "label": "Export limit to restore (W)",
-             "type": "number", "min": 0, "max": 15000, "default": 6000},
-        ],
-    },
-    {
-        "id":          "tpl_smart_self_use",
-        "name":        "Smart Self-Use (complete set)",
-        "description": "Creates 4 automations together:\n"
-                       "1. Zero export → battery first (battery < max SoC)\n"
-                       "2. Restore export when battery full\n"
-                       "3. Pre-evening boost (charge if SoC < target before 15:00)\n"
-                       "4. Min SoC floor to protect battery overnight\n"
-                       "This is the closest to Self-Use mode on the ES. ⚠️ Rules 1-3 do NOT "
-                       "cap/stop battery charging — no mechanism on this firmware can. "
-                       "Rule 4 (discharge floor via DoD) and export-limit changes are real "
-                       "and reliable; the SoC targets in rules 2-3 are best-effort only.",
-        "multi":       True,
-        "params":      [
-            {"key": "max_soc",   "label": "Max SoC / full battery (%)", "type": "number",
-             "min": 70, "max": 100, "default": 90},
-            {"key": "min_soc",   "label": "Min SoC / night reserve (%)", "type": "number",
-             "min": 5,  "max":  40, "default": 20},
-            {"key": "evening_target", "label": "Evening SoC target (%)", "type": "number",
-             "min": 60, "max": 100, "default": 85},
-            {"key": "export_limit", "label": "Normal export limit (W)", "type": "number",
-             "min": 0,  "max": 15000, "default": 6000},
-            {"key": "hysteresis", "label": "Hysteresis band (%)", "type": "number",
-             "min": 1,  "max": 15,   "default": 3,
-             "hint": "SoC must move this far from trigger before rule can re-fire. Prevents oscillation."},
         ],
     },
     {

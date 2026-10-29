@@ -1,6 +1,7 @@
 import { useInverter } from '../context/InverterContext'
 import StatCard from '../components/StatCard'
 import { Zap, TrendingUp, TrendingDown } from 'lucide-react'
+import { fmtEnergy } from '../lib/format'
 
 function PhaseCard({ phase, v, i, p, f }: { phase: string; v: number; i: number; p: number; f: number }) {
   return (
@@ -52,8 +53,8 @@ export default function Grid() {
         <StatCard label="Frequency" value={data.fgrid?.toFixed(3) ?? '—'} unit="Hz" />
         <StatCard label="Imported Today" value={data.e_day_imp?.toFixed(2) ?? '—'} unit="kWh" color="text-red-400" />
         <StatCard label="Exported Today" value={data.e_day_exp?.toFixed(2) ?? '—'} unit="kWh" color="text-emerald-400" />
-        <StatCard label="Total Imported" value={data.e_total_imp ? (data.e_total_imp / 1000).toFixed(2) : '—'} unit="MWh" color="text-red-400" />
-        <StatCard label="Total Exported" value={data.e_total_exp ? (data.e_total_exp / 1000).toFixed(2) : '—'} unit="MWh" color="text-emerald-400" />
+        <StatCard label="Total Imported" value={fmtEnergy(data.e_total_imp).value} unit={fmtEnergy(data.e_total_imp).unit} color="text-red-400" />
+        <StatCard label="Total Exported" value={fmtEnergy(data.e_total_exp).value} unit={fmtEnergy(data.e_total_exp).unit} color="text-emerald-400" />
         <StatCard label="Safety Standard" value={data.safety_country_label ?? '—'} />
         <StatCard label="Work Mode" value={data.work_mode_label ?? '—'} />
       </div>

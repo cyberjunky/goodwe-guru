@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 export interface InverterData {
   // PV
@@ -49,7 +49,7 @@ interface InverterContextValue {
   lastUpdate: Date | null
   settings: Record<string, unknown>
   loadSettings: () => void
-  writeSetting: (key: string, value: unknown) => Promise<void>
+  writeSetting: (key: string, value: unknown, reload?: boolean) => Promise<void>
   platform: string   // 'ES' | 'ET' | 'XS' | '' — populated after first connection
 }
 
@@ -66,14 +66,20 @@ export function InverterProvider({ children, token, onAuthFail }: { children: Re
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    connect()
+    // `disposed` stops the closed socket's onclose from scheduling a reconnect
+    // after cleanup — otherwise an orphan socket keeps reconnecting with the
+    // old token (and its 4401 can log out a freshly logged-in user).
+    let disposed = false
+    connect(() => disposed)
     return () => {
+      disposed = true
       wsRef.current?.close()
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
     }
   }, [token])
 
-  function connect() {
+  function connect(isDisposed: () => boolean) {
+    if (isDisposed()) return
     setStatus('connecting')
     const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/inverter?token=${encodeURIComponent(token)}`
     const ws = new WebSocket(wsUrl)
@@ -109,9 +115,10 @@ export function InverterProvider({ children, token, onAuthFail }: { children: Re
     }
 
     ws.onclose = (ev) => {
+      if (isDisposed()) return
       if (ev.code === 4401) { onAuthFail(); return }
       setStatus('disconnected')
-      reconnectTimer.current = setTimeout(connect, 5000)
+      reconnectTimer.current = setTimeout(() => connect(isDisposed), 5000)
     }
 
     ws.onerror = () => setStatus('error')
@@ -123,22 +130,33 @@ export function InverterProvider({ children, token, onAuthFail }: { children: Re
     try {
       const res = await fetch('/api/settings', { headers: authHeaders })
       if (res.status === 401) { onAuthFail(); return }
-      const json = await res.json()
-      setSettings(json)
+      if (res.ok) setSettings(await res.json())
     } catch { /* ignore */ }
   }
 
-  async function writeSetting(key: string, value: unknown) {
-    await fetch('/api/settings', {
+  /** Throws on failure — a write the inverter rejected must not look saved.
+   *  Pass reload=false when writing several keys, then call loadSettings()
+   *  once: each reload is a full AA55 settings read. */
+  async function writeSetting(key: string, value: unknown, reload = true) {
+    const res = await fetch('/api/settings', {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({ key, value }),
     })
-    await loadSettings()
+    if (res.status === 401) onAuthFail()
+    if (!res.ok) {
+      const detail = await res.json().then(j => j.detail, () => '')
+      throw new Error(`${key}: ${detail || res.statusText}`)
+    }
+    if (reload) await loadSettings()
   }
 
+  // Stable identity: a fresh object every render (i.e. every WebSocket
+  // message) re-fired consumers' [settings] effects and wiped unsaved edits.
+  const mergedSettings = useMemo(() => ({ ...settings, platform }), [settings, platform])
+
   return (
-    <InverterContext.Provider value={{ data, history, status, lastUpdate, settings: { ...settings, platform }, loadSettings, writeSetting, platform }}>
+    <InverterContext.Provider value={{ data, history, status, lastUpdate, settings: mergedSettings, loadSettings, writeSetting, platform }}>
       {children}
     </InverterContext.Provider>
   )

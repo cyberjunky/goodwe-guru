@@ -1,10 +1,15 @@
-"""SQLite persistence for inverter snapshots and daily summaries."""
+"""SQLite persistence for inverter snapshots and daily summaries.
 
+Dates are LOCAL calendar days throughout (the inverter's own day counters
+reset at local midnight). Rows written before 2026-10-29 used UTC dates; for
+cumulative MAX-merged counters that only shifts the 0-2 h tail of each day.
+"""
+
+import json
 import sqlite3
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 from config import settings as cfg
 
@@ -55,10 +60,14 @@ class Database:
                 pgrid_max         REAL DEFAULT 0
             );
         """)
+        cols = {r[1] for r in cur.execute("PRAGMA table_info(daily_summary)")}
+        if "imp_by_hour" not in cols:
+            # 24 local-hour import buckets (kWh, JSON) derived from snapshots —
+            # what time-of-use pricing needs. NULL for days without snapshots.
+            cur.execute("ALTER TABLE daily_summary ADD COLUMN imp_by_hour TEXT")
         self.con.commit()
 
     def insert_snapshot(self, data: dict):
-        import json
         ts = int(time.time())
         slim = {k: data[k] for k in SNAPSHOT_KEYS if k in data}
         self.con.execute("INSERT INTO snapshots (ts, data) VALUES (?,?)", (ts, json.dumps(slim)))
@@ -67,7 +76,7 @@ class Database:
         self._prune()
 
     def _upsert_daily(self, data: dict):
-        date = datetime.utcfromtimestamp(time.time()).strftime("%Y-%m-%d")
+        date = datetime.now().strftime("%Y-%m-%d")
         self.con.execute("""
             INSERT INTO daily_summary(date, e_day, e_day_exp, e_day_imp, e_load_day,
                 e_bat_charge_day, e_bat_discharge_day, ppv_max, pgrid_min, pgrid_max)
@@ -97,17 +106,15 @@ class Database:
     def get_history(self, range_: str) -> list[dict]:
         cur = self.con.cursor()
         if range_ == "today":
-            date = datetime.utcnow().strftime("%Y-%m-%d")
-            # return per-10-min averages from raw snapshots
+            # raw snapshots of the last 24 h (Telegram power chart)
             cutoff = int(time.time()) - 86400
             rows = cur.execute(
                 "SELECT ts, data FROM snapshots WHERE ts > ? ORDER BY ts", (cutoff,)
             ).fetchall()
-            import json
             result = []
             for r in rows:
                 d = json.loads(r["data"])
-                d["ts"] = datetime.utcfromtimestamp(r["ts"]).strftime("%H:%M")
+                d["ts"] = datetime.fromtimestamp(r["ts"]).strftime("%H:%M")
                 result.append(d)
             return result
         elif range_ == "7d":
@@ -126,7 +133,7 @@ class Database:
                     SUM(e_bat_charge_day) as e_bat_charge_day,
                     SUM(e_bat_discharge_day) as e_bat_discharge_day
                 FROM daily_summary
-                WHERE date >= date('now','-12 months')
+                WHERE date >= date('now','localtime','-12 months')
                 GROUP BY substr(date,1,7)
                 ORDER BY ts
             """).fetchall()
@@ -134,26 +141,26 @@ class Database:
 
         return [{"ts": r["date"], **{k: r[k] for k in r.keys() if k != "date"}} for r in rows]
 
-    def get_energy_flow(self, date: str | None = None) -> dict:
+    @staticmethod
+    def _day_bounds(date: str | None) -> tuple[str, int, int]:
+        """(date, start_ts, end_ts) of a local calendar day; today if unparsable."""
+        try:
+            start_dt = datetime.strptime(date or "", "%Y-%m-%d")
+        except ValueError:
+            start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        end_dt = start_dt + timedelta(days=1)
+        return start_dt.strftime("%Y-%m-%d"), int(start_dt.timestamp()), int(end_dt.timestamp())
+
+    def _integrate(self, start: int, end: int) -> tuple[dict, list[float], int]:
         """
-        Integrate the day's raw snapshots into Sankey-style energy flows (kWh),
-        decomposing each instant by a priority model:
+        Integrate raw snapshots in [start, end) into energy flows (Wh), using a
+        priority model per instant:
           solar → load, then battery charge, then grid export
           battery discharge → load
           grid import → load, then battery charge
+        Also returns grid import per local hour (Wh) for time-of-use pricing.
         Works without inverter import/export counters (which ES lacks).
         """
-        import json
-        if not date:
-            date = datetime.now().strftime("%Y-%m-%d")
-        try:
-            start_dt = datetime.strptime(date, "%Y-%m-%d")
-        except ValueError:
-            start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            date = start_dt.strftime("%Y-%m-%d")
-        start = int(start_dt.timestamp())
-        end   = int((start_dt + timedelta(days=1)).timestamp())
-
         rows = self.con.execute(
             "SELECT ts, data FROM snapshots WHERE ts>=? AND ts<? ORDER BY ts",
             (start, end),
@@ -161,6 +168,7 @@ class Database:
 
         links = {"solar_load": 0.0, "solar_batt": 0.0, "solar_grid": 0.0,
                  "batt_load": 0.0, "grid_load": 0.0, "grid_batt": 0.0}
+        imp_by_hour = [0.0] * 24
         prev_ts = None
         for r in rows:
             ts = r["ts"]
@@ -195,8 +203,14 @@ class Database:
                     links["batt_load"]  += b_load * h
                     links["grid_load"]  += g_load * h
                     links["grid_batt"]  += g_batt * h
+                    imp_by_hour[datetime.fromtimestamp(ts).hour] += gi * h
             prev_ts = ts
+        return links, imp_by_hour, len(rows)
 
+    def get_energy_flow(self, date: str | None = None) -> dict:
+        """Sankey-style energy flows (kWh) for one local day — see _integrate."""
+        date, start, end = self._day_bounds(date)
+        links, _, samples = self._integrate(start, end)
         links = {k: round(v / 1000, 3) for k, v in links.items()}   # Wh → kWh
         sources = {
             "solar":   round(links["solar_load"] + links["solar_batt"] + links["solar_grid"], 3),
@@ -209,7 +223,68 @@ class Database:
             "grid":    round(links["solar_grid"], 3),
         }
         return {"date": date, "links": links, "sources": sources,
-                "destinations": destinations, "samples": len(rows)}
+                "destinations": destinations, "samples": samples}
+
+    def update_derived(self, date: str | None = None) -> None:
+        """
+        Fill a day's import/export/load/battery energies from snapshots.
+
+        ES has no daily import/export counters (they read 0), so without this
+        History, Finance and the dashboard's "today" figures were all 0 — and
+        Finance counted every kWh of solar as self-consumed. MAX-merged, like
+        the inverter counters: where a platform does report them the larger
+        of the two wins, and a day whose early snapshots were already pruned
+        keeps its earlier, more complete value.
+        """
+        date, start, end = self._day_bounds(date)
+        links, imp_by_hour, samples = self._integrate(start, end)
+        if samples < 2:
+            return
+
+        def kwh(*ks):
+            return round(sum(links[k] for k in ks) / 1000, 3)
+
+        self.con.execute(
+            "INSERT INTO daily_summary(date) VALUES(?) ON CONFLICT(date) DO NOTHING", (date,))
+        self.con.execute("""
+            UPDATE daily_summary SET
+                e_day_imp           = MAX(e_day_imp, ?),
+                e_day_exp           = MAX(e_day_exp, ?),
+                e_load_day          = MAX(e_load_day, ?),
+                e_bat_charge_day    = MAX(e_bat_charge_day, ?),
+                e_bat_discharge_day = MAX(e_bat_discharge_day, ?),
+                imp_by_hour         = ?
+            WHERE date = ?
+        """, (
+            kwh("grid_load", "grid_batt"), kwh("solar_grid"),
+            kwh("solar_load", "batt_load", "grid_load"),
+            kwh("solar_batt", "grid_batt"), kwh("batt_load"),
+            json.dumps([round(v / 1000, 4) for v in imp_by_hour]), date,
+        ))
+        self.con.commit()
+
+    def snapshot_dates(self) -> list[str]:
+        """Local dates that still have raw snapshots (for the startup backfill)."""
+        row = self.con.execute("SELECT MIN(ts), MAX(ts) FROM snapshots").fetchone()
+        if not row or row[0] is None:
+            return []
+        d, last = datetime.fromtimestamp(row[0]).date(), datetime.fromtimestamp(row[1]).date()
+        out = []
+        while d <= last:
+            out.append(d.isoformat())
+            d += timedelta(days=1)
+        return out
+
+    def energy_totals(self) -> dict:
+        """Today's derived day energies + lifetime import/export sums (kWh)."""
+        today = self.get_today_summary()
+        tot = self.con.execute(
+            "SELECT SUM(e_day_imp), SUM(e_day_exp) FROM daily_summary").fetchone()
+        out = {k: float(today.get(k) or 0) for k in
+               ("e_day_imp", "e_day_exp", "e_load_day", "e_bat_charge_day", "e_bat_discharge_day")}
+        out["e_total_imp"] = round(float(tot[0] or 0), 2)
+        out["e_total_exp"] = round(float(tot[1] or 0), 2)
+        return out
 
     def record_forecast(self, date: str, forecast_kwh: float):
         """Store the day's forecast once (first capture of the day wins)."""
@@ -252,16 +327,7 @@ class Database:
         (charge / discharge / hold / idle). Battery is from energy balance
         (solar + pgrid - load), so it's independent of the pbattery1 sign.
         """
-        import json
-        if not date:
-            date = datetime.now().strftime("%Y-%m-%d")
-        try:
-            start_dt = datetime.strptime(date, "%Y-%m-%d")
-        except ValueError:
-            start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            date = start_dt.strftime("%Y-%m-%d")
-        start = int(start_dt.timestamp())
-        end   = int((start_dt + timedelta(days=1)).timestamp())
+        date, start, end = self._day_bounds(date)
         bucket = max(1, bucket_min) * 60
 
         rows = self.con.execute(
@@ -304,36 +370,26 @@ class Database:
         row = self.con.execute("SELECT MAX(ppv_max) AS m FROM daily_summary").fetchone()
         return float(row["m"] or 0) if row else 0.0
 
+    def daily_rows(self, days: int) -> list[dict]:
+        """daily_summary rows of the last `days` local days, oldest first."""
+        since = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        rows = self.con.execute(
+            "SELECT * FROM daily_summary WHERE date >= ? ORDER BY date", (since,)).fetchall()
+        return [dict(r) for r in rows]
+
     def get_today_summary(self) -> dict:
         """Return today's daily_summary row as a dict (for Telegram daily message)."""
-        date = datetime.utcnow().strftime("%Y-%m-%d")
+        date = datetime.now().strftime("%Y-%m-%d")
         row = self.con.execute(
             "SELECT * FROM daily_summary WHERE date=?", (date,)
         ).fetchone()
         return dict(row) if row else {}
 
     def get_cumulative_savings(self, tariffs) -> float:
-        """
-        Sum all historical net benefits to compute total savings for payback tracking.
-        Requires tariffs object to do per-row calc.
-        """
-        from tariffs import calc_financials
-        rows = self.con.execute(
-            "SELECT e_day, e_day_exp, e_day_imp, e_load_day, e_bat_discharge_day "
-            "FROM daily_summary ORDER BY date"
-        ).fetchall()
-        total = 0.0
-        for r in rows:
-            fin = calc_financials(
-                tariffs,
-                e_imp    = r[2] or 0,
-                e_exp    = r[1] or 0,
-                e_solar  = r[0] or 0,
-                e_load   = r[3] or 0,
-                e_bat_dis= r[4] or 0,
-            )
-            total += fin["net_benefit"]
-        return total
+        """Sum all historical net benefits, for payback tracking."""
+        from tariffs import day_financials
+        rows = self.con.execute("SELECT * FROM daily_summary ORDER BY date").fetchall()
+        return sum(day_financials(tariffs, dict(r))["net_benefit"] for r in rows)
 
     def close(self):
         self.con.close()

@@ -144,11 +144,13 @@ export default function EnergyFlow({ ppv, pbattery, pgrid, pload, soc, deviceTra
     wanted.forEach(({ arm, reverse, color, w }) => {
       const n = count(w)
       const s = speed(w)
+      // Keep each dot's own position — find() handed every dot the first
+      // dot's t, collapsing the whole arm into one dot after a power change.
+      const existing = dotsRef.current.filter(d => d.arm === arm && d.reverse === reverse)
       for (let i = 0; i < n; i++) {
-        const existing = dotsRef.current.find(d => d.arm === arm && d.reverse === reverse)
         next.push({
           arm, reverse, color, spd: s,
-          t: existing ? existing.t : i / Math.max(n, 1),
+          t: existing[i]?.t ?? i / Math.max(n, 1),
         })
       }
     })
@@ -238,7 +240,8 @@ export default function EnergyFlow({ ppv, pbattery, pgrid, pload, soc, deviceTra
   const socArc = (() => {
     if (soc < 2) return ''
     const r = NR - 8, bx = NODE.bat.x, by = NODE.bat.y
-    const a = (soc / 100) * 2 * Math.PI
+    // At exactly 100% the arc's end point equals its start and SVG drops it.
+    const a = (Math.min(soc, 99.9) / 100) * 2 * Math.PI
     return `M ${bx},${by - r} A ${r},${r} 0 ${soc > 50 ? 1 : 0},1 ${bx + r * Math.sin(a)},${by - r * Math.cos(a)}`
   })()
   const socCol = soc > 60 ? '#34d399' : soc > 20 ? '#f59e0b' : '#f87171'

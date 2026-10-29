@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useInverter } from '../context/InverterContext'
 import StatCard from '../components/StatCard'
 import { fmtEnergy } from '../lib/format'
@@ -54,6 +55,18 @@ function StringCard({ n, v, i, p }: { n: number; v: number; i: number; p: number
 
 export default function Solar() {
   const { data } = useInverter()
+  const [monthKwh, setMonthKwh] = useState<number | null>(null)
+
+  useEffect(() => {
+    const token = localStorage.getItem('gw_token') ?? ''
+    const d = new Date()   // LOCAL YYYY-MM — the 12m buckets are local dates
+    const month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    fetch('/api/history?range=12m', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then((rows: { ts: string; e_day?: number }[]) =>
+        setMonthKwh(Array.isArray(rows) ? rows.find(r => r.ts === month)?.e_day ?? 0 : null))
+      .catch(() => {})
+  }, [])
 
   if (!data) return <div className="p-6 text-gray-500">No data</div>
 
@@ -77,7 +90,7 @@ export default function Solar() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Total PV Power" value={(data.ppv / 1000).toFixed(2)} unit="kW" color="text-amber-400" icon={<Sun size={14} />} />
         <StatCard label="Today" value={data.e_day?.toFixed(2) ?? '—'} unit="kWh" color="text-amber-300" />
-        <StatCard label="This month" value="—" unit="kWh" />
+        <StatCard label="This month" value={monthKwh === null ? '—' : fmtEnergy(monthKwh).value} unit={monthKwh === null ? 'kWh' : fmtEnergy(monthKwh).unit} />
         <StatCard label="All-time" value={data.e_total ? fmtEnergy(data.e_total as number).value : '—'} unit={data.e_total ? fmtEnergy(data.e_total as number).unit : 'kWh'} icon={<TrendingUp size={14} />} />
       </div>
 
@@ -112,7 +125,7 @@ export default function Solar() {
       {/* Export stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Exported Today" value={data.e_day_exp?.toFixed(2) ?? '—'} unit="kWh" color="text-emerald-400" />
-        <StatCard label="Total Exported" value={data.e_total_exp ? (data.e_total_exp / 1000).toFixed(2) : '—'} unit="MWh" color="text-emerald-400" />
+        <StatCard label="Total Exported" value={fmtEnergy(data.e_total_exp).value} unit={fmtEnergy(data.e_total_exp).unit} color="text-emerald-400" />
         <StatCard label="Bat Charge Today" value={data.e_bat_charge_day?.toFixed(2) ?? '—'} unit="kWh" color="text-blue-400" />
         <StatCard label="Bat Charge Total" value={data.e_bat_charge_total ? (data.e_bat_charge_total / 1000).toFixed(2) : '—'} unit="MWh" color="text-blue-400" />
       </div>

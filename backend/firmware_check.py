@@ -27,7 +27,6 @@ import json
 import logging
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import Any
 
 import httpx
 
@@ -146,15 +145,19 @@ async def run_loop(get_inverter, get_notify_config, send_telegram_fn):
                         key = str(u["type"])
                         if state.last_alerted.get(key) != u["available"]:
                             nc = get_notify_config()
+                            sent = False
                             if nc.enabled and nc.bot_token:
-                                await send_telegram_fn(nc,
+                                sent = await send_telegram_fn(nc,
                                     f"🔧 <b>Inverter firmware update available</b>\n"
                                     f"{u['type_name']}: {u['current']} → <b>{u['available']}</b>\n"
                                     f"Released: {u.get('released', '?')}\n"
                                     f"This is a notification only -- apply manually via SolarGo/SEMS "
                                     f"(see README). File: {u['url']}")
-                            state.last_alerted[key] = u["available"]
-                            changed = True
+                            # Only remember it once actually delivered — otherwise
+                            # a Telegram outage that day loses the alert for good.
+                            if sent:
+                                state.last_alerted[key] = u["available"]
+                                changed = True
                             log.info("Firmware update available: %s %s -> %s",
                                      u["type_name"], u["current"], u["available"])
                     if changed:

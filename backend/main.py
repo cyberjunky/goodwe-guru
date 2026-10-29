@@ -6,9 +6,11 @@ Costs/tariffs, solar forecast, Telegram notifications.
 """
 
 import asyncio
+import copy
 import json
 import logging
 import re
+import secrets
 import subprocess
 import time
 import traceback
@@ -28,7 +30,7 @@ from pydantic import BaseModel
 from auth import create_token, verify_token
 from config import settings as cfg
 from database import Database
-from tariffs import load_tariffs, save_tariffs, calc_financials
+from tariffs import load_tariffs, save_tariffs, calc_financials, day_financials
 from forecast import load_forecast_config, save_forecast_config, fetch_forecast, hourly_today, daily_forecast, clear_cache as clear_forecast_cache
 from notifications import load_notification_config, save_notification_config, check_and_notify, send_telegram, notify_inverter_connection
 import automations as auto_engine
@@ -42,6 +44,7 @@ log = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 inverter: goodwe.Inverter | None = None
 latest_data: dict        = {}
+latest_at: float         = 0.0   # monotonic time of the last successful poll
 ws_clients: set[WebSocket] = set()
 
 db: Database   # initialised inside lifespan, not at import time
@@ -76,7 +79,7 @@ def normalise(data: dict) -> dict:
     ES (platform 105) differences vs ET (platform 745):
       pload / plant_power  → load_ptotal
       pback_up             → backup_ptotal
-      e_total is kWh       → ET stores as Wh, multiply ES by 1000 to match
+      e_total is kWh       → passed through unscaled (frontend expects kWh)
       no e_day_imp / e_day_exp / e_load_day on older firmware → set to 0
       house_consumption    → load_ptotal fallback
     """
@@ -126,7 +129,7 @@ def normalise(data: dict) -> dict:
 
 
 async def poll_inverter():
-    global latest_data
+    global latest_data, latest_at
     from inverter_io import inverter_lock
     await connect_inverter()
     await asyncio.sleep(3)
@@ -141,7 +144,13 @@ async def poll_inverter():
                 data["device_tracked_w"] = dev_engine.get_tracked_power()["total_w"]
             except Exception:
                 pass
+            # ES reports no import/export/load day counters (they read 0) —
+            # fill them from the snapshot-derived figures (energy_deriver).
+            for k, v in _derived_energy.items():
+                if not data.get(k):
+                    data[k] = v
             latest_data = data
+            latest_at = time.monotonic()
             consecutive_errors = 0
             asyncio.create_task(notify_inverter_connection(True))
         except Exception as e:
@@ -158,7 +167,10 @@ async def poll_inverter():
             continue
 
         # Always broadcast live data — DB write is best-effort
-        await broadcast({"type": "data", "payload": latest_data})
+        try:
+            await broadcast({"type": "data", "payload": latest_data})
+        except Exception as e:
+            log.warning("Broadcast failed: %s", e)
         try:
             db.insert_snapshot(latest_data)
             asyncio.create_task(check_and_notify(latest_data, db.get_today_summary(),
@@ -171,12 +183,41 @@ async def poll_inverter():
 
 async def broadcast(msg: dict):
     dead, payload = set(), json.dumps(msg)
-    for ws in ws_clients:
+    # Iterate a snapshot: a tab connecting/closing during an await mutates
+    # ws_clients, and "set changed size" would kill the poll loop.
+    for ws in list(ws_clients):
         try:
             await ws.send_text(payload)
         except Exception:
             dead.add(ws)
     ws_clients.difference_update(dead)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Snapshot-derived day energies (import/export/load/battery) — ES lacks the
+# counters. Integrating a day of 10 s snapshots takes well under a second, so
+# every 5 min is cheap; yesterday is redone too so its last minutes land.
+# ─────────────────────────────────────────────────────────────────────────────
+_derived_energy: dict = {}
+
+
+async def energy_deriver():
+    global _derived_energy
+    from datetime import date, timedelta
+    try:
+        for d in db.snapshot_dates():          # backfill whatever snapshots remain
+            db.update_derived(d)
+    except Exception as e:
+        log.warning("energy_deriver backfill: %s", e)
+    while True:
+        try:
+            today = date.today()
+            db.update_derived((today - timedelta(days=1)).isoformat())
+            db.update_derived(today.isoformat())
+            _derived_energy = db.energy_totals()
+        except Exception as e:
+            log.warning("energy_deriver: %s", e)
+        await asyncio.sleep(300)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -213,6 +254,32 @@ _HOLD_DISCHARGE_W = 100
 _HOLD_STRIKES     = 3      # 3 × 5 min = sustained for ~15 min
 _hold_strikes     = 0
 
+# Watchdogs judge the inverter on polled data; while polls fail, latest_data
+# keeps its last value, and counting strikes on that would be judging a ghost.
+_STALE_S = 120
+
+
+def _data_fresh() -> bool:
+    return bool(latest_data) and time.monotonic() - latest_at < _STALE_S
+
+
+# Flash budget for scheduler DoD writes. Steady state is ~2/day; if read-back
+# keeps disagreeing, _apply_dod_verified would otherwise write 3× every 5 min
+# all day. Past the budget it stops writing until tomorrow and says so once.
+_DOD_WRITES_PER_DAY = 12
+_dod_budget = {"date": "", "used": 0, "warned": False}
+
+
+def _dod_budget_take() -> bool:
+    from datetime import date
+    today = date.today().isoformat()
+    if _dod_budget["date"] != today:
+        _dod_budget.update(date=today, used=0, warned=False)
+    if _dod_budget["used"] >= _DOD_WRITES_PER_DAY:
+        return False
+    _dod_budget["used"] += 1
+    return True
+
 
 async def _apply_dod_verified(target: int, tries: int = 3, source: str = "battery scheduler") -> bool:
     """Write DoD and confirm it stuck (AA55 writes are occasionally lost).
@@ -226,6 +293,17 @@ async def _apply_dod_verified(target: int, tries: int = 3, source: str = "batter
     last_read = None
     confirmed = False
     for _ in range(tries):
+        if not _dod_budget_take():
+            if not _dod_budget["warned"]:
+                _dod_budget["warned"] = True
+                log.warning("DoD write budget (%d/day) used up — not writing until tomorrow",
+                            _DOD_WRITES_PER_DAY)
+                await notify_inverter_write(
+                    "dod", target, "", source,
+                    error=f"daily write budget ({_DOD_WRITES_PER_DAY}) used up — the inverter "
+                          f"keeps reporting a different DoD; not writing again until tomorrow "
+                          f"to spare its flash")
+            return False
         await apply_setting(inverter, "dod", target, notify=False)
         await asyncio.sleep(3)
         try:
@@ -272,6 +350,8 @@ async def _hold_watchdog(target_dod: int) -> None:
     from inverter_io import inverter_lock
     from notifications import notify_hold_violation
 
+    if not _data_fresh():
+        return
     pbat = float(latest_data.get("pbattery1") or 0)      # normalised: + = charging
     soc  = float(latest_data.get("battery_soc") or 0)
 
@@ -310,6 +390,17 @@ async def _hold_watchdog(target_dod: int) -> None:
         await _apply_dod_verified(target_dod, source="hold watchdog")
 
 
+def _save_cap_state(sch) -> None:
+    """Persist only the charge cap's own state fields. The tick loaded `sch`
+    before awaiting inverter_lock, so saving it whole would overwrite a
+    Battery-page edit made in the meantime."""
+    from battery_schedule import load_schedule, save_schedule
+    cur = load_schedule()
+    cur.charge_cap_active    = sch.charge_cap_active
+    cur.charge_cap_last_full = sch.charge_cap_last_full
+    save_schedule(cur)
+
+
 async def _charge_cap_tick(sch) -> None:
     """SoC charge cap via the 0x0351 charge-current brake (see inverter_io.py).
 
@@ -321,7 +412,6 @@ async def _charge_cap_tick(sch) -> None:
     rapid retries.
     """
     from datetime import date
-    from battery_schedule import save_schedule
     from inverter_io import apply_setting
 
     cap = int(getattr(sch, "charge_cap_soc", 0) or 0)
@@ -329,6 +419,8 @@ async def _charge_cap_tick(sch) -> None:
     # Amps. Prefer the BMS's own live ceiling so the release always restores
     # full allowed current even if the configured value is stale/too low.
     release_current = int(getattr(sch, "charge_cap_release_current", 50) or 50)
+    if not _data_fresh():
+        return   # SoC below would be the last value before polls started failing
     bms_limit = int(float(latest_data.get("battery_charge_limit") or 0))
     if bms_limit > 0:
         release_current = max(release_current, bms_limit)
@@ -341,7 +433,7 @@ async def _charge_cap_tick(sch) -> None:
             # Cap switched off while braked — release so charging isn't stuck off.
             await apply_setting(inverter, "charge_i", release_current, "charge cap")
             sch.charge_cap_active = False
-            save_schedule(sch)
+            _save_cap_state(sch)
             log.info("Charge cap disabled while braked — released (charge_i → %d)", release_current)
         return
 
@@ -359,29 +451,110 @@ async def _charge_cap_tick(sch) -> None:
         if braked:
             await apply_setting(inverter, "charge_i", release_current, "charge cap")
             sch.charge_cap_active = False
-            save_schedule(sch)
+            _save_cap_state(sch)
             log.info("Charge cap: BMS-balancing day — released for a full charge")
         if soc >= 99:
             sch.charge_cap_last_full = today
-            save_schedule(sch)
+            _save_cap_state(sch)
             log.info("Charge cap: 100%% reached — BMS balance done, cap resumes")
         return
 
     if not braked and soc >= cap:
         await apply_setting(inverter, "charge_i", 0, "charge cap")
         sch.charge_cap_active = True
-        save_schedule(sch)
+        _save_cap_state(sch)
         log.info("Charge cap: SoC %.0f%% ≥ %d%% — charging braked", soc, cap)
     elif braked and soc <= cap - 5:
         await apply_setting(inverter, "charge_i", release_current, "charge cap")
         sch.charge_cap_active = False
-        save_schedule(sch)
+        _save_cap_state(sch)
         log.info("Charge cap: SoC %.0f%% ≤ %d%% — charging released", soc, cap - 5)
+
+
+# Zero export. The CT regulation loop overshoots briefly on every load drop
+# (kettle off → a few hundred W out for seconds), so like the hold watchdog
+# only a sustained export counts.
+_EXPORT_W        = 150
+_EXPORT_STRIKES  = 3       # 3 × 5 min
+_export_strikes  = 0
+_export_verified = False   # one-shot settings check after enable / startup
+
+
+async def _read_export_settings() -> tuple[int | None, int | None]:
+    """(grid_export_limit W, grid_export switch) — (None, None) if unreadable."""
+    from inverter_io import inverter_lock
+    try:
+        async with inverter_lock:
+            d = await inverter.read_settings_data()
+        val = lambda k: int(getattr(d.get(k), "value", d.get(k)))
+        return val("grid_export_limit"), val("grid_export")
+    except Exception as e:
+        log.info("Zero export: settings read failed (%s)", e)
+        return None, None
+
+
+async def _write_zero_export(limit: int, enabled: int) -> None:
+    """Send only what is wrong — each write is a flash write."""
+    from inverter_io import apply_setting
+    if limit != 0:
+        await apply_setting(inverter, "grid_export_limit", 0, "zero export")
+    if enabled != 1:
+        if limit != 0:
+            await asyncio.sleep(3)    # don't fire AA55 commands back-to-back
+        await apply_setting(inverter, "grid_export", 1, "zero export")
+
+
+async def _zero_export_tick(sch) -> None:
+    """Keep grid export at 0 W (see battery_schedule.zero_export).
+
+    Gentle on the AA55 stack, same pattern as _hold_watchdog: the settings
+    are read once when the feature is enabled (or the app starts), then only
+    again when polled grid power shows export above _EXPORT_W for
+    _EXPORT_STRIKES consecutive checks. That read tells apart a lost/reset
+    setting (re-send it) from the firmware ignoring a correct one (alert
+    only — re-writing the same value would just burn flash).
+    """
+    global _export_strikes, _export_verified
+    from notifications import notify_export_violation
+
+    if not getattr(sch, "zero_export", False):
+        _export_strikes, _export_verified = 0, False
+        return
+
+    if not _export_verified:
+        limit, enabled = await _read_export_settings()
+        if limit is None:
+            return                                   # retry next cycle
+        if limit != 0 or enabled != 1:
+            log.info("Zero export: limit %d W, switch %d → setting 0 W / on", limit, enabled)
+            await _write_zero_export(limit, enabled)
+        _export_verified = True
+        return
+
+    if not _data_fresh():
+        return
+    export_w = -float(latest_data.get("pgrid") or 0)    # normalised: < 0 = export
+    if export_w < _EXPORT_W:
+        if _export_strikes >= _EXPORT_STRIKES:
+            await notify_export_violation(0, None, None, recovered=True)
+        _export_strikes = 0
+        return
+
+    _export_strikes += 1
+    if _export_strikes != _EXPORT_STRIKES:
+        return                                       # not sustained yet / already reported
+    limit, enabled = await _read_export_settings()
+    drifted = limit is not None and (limit != 0 or enabled != 1)
+    log.warning("Zero export: exporting %.0f W for %d+ min (limit %s W, switch %s)",
+                export_w, _EXPORT_STRIKES * 5, limit, enabled)
+    await notify_export_violation(export_w, limit, enabled, resending=drifted)
+    if drifted:
+        await _write_zero_export(limit, enabled)
 
 
 async def battery_forecast_scheduler():
     """
-    Two independent duties, both checked every 5 min:
+    Three independent duties, all checked every 5 min:
 
     1. Forecast hold (sch.enabled): hold the battery (DoD 0, no discharge)
        while producing AND below the release threshold (`max_soc`). Once SoC
@@ -391,6 +564,9 @@ async def battery_forecast_scheduler():
     2. Charge cap (sch.charge_cap_soc): brakes ALL charging once SoC reaches
        the cap (see _charge_cap_tick) — the actual 80% cap the owner wants,
        possible since the 0x0351 command was confirmed working (2026-07-30).
+
+    3. Zero export (sch.zero_export): keep the export limit at 0 W and watch
+       for sustained export (see _zero_export_tick).
     """
     global _hold_strikes
     from battery_schedule import load_schedule
@@ -403,7 +579,9 @@ async def battery_forecast_scheduler():
             if inverter is not None:
                 if sch.enabled:
                     data = await fetch_forecast(load_forecast_config())   # cached (30 min)
-                    if not data.get("watts"):
+                    if not _data_fresh():
+                        pass      # polls failing — SoC/PV below would be stale; keep DoD
+                    elif not data.get("watts"):
                         # No forecast at all (fetch failed, nothing cached) — don't
                         # guess: keep the current DoD and retry next cycle.
                         log.warning("Battery forecast schedule: no forecast data — keeping DoD as-is")
@@ -432,6 +610,7 @@ async def battery_forecast_scheduler():
                 else:
                     last_dod = None
                 await _charge_cap_tick(sch)
+                await _zero_export_tick(sch)
             else:
                 last_dod = None
         except Exception as e:
@@ -466,6 +645,7 @@ async def lifespan(_app: FastAPI):
         send_telegram_fn=send_telegram,
     ))
     asyncio.create_task(forecast_logger())
+    asyncio.create_task(energy_deriver())
     asyncio.create_task(battery_forecast_scheduler())
     asyncio.create_task(dev_engine.poll_devices_loop())
     yield
@@ -498,7 +678,8 @@ class LoginRequest(BaseModel):
 
 @app.post("/api/auth/login")
 async def login(req: LoginRequest):
-    if req.password != cfg.password:
+    if not secrets.compare_digest(req.password.encode(), cfg.password.encode()):
+        await asyncio.sleep(1)    # cheap brake on password guessing
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid password")
     return {"access_token": create_token(), "token_type": "bearer"}
 
@@ -541,7 +722,12 @@ async def write_setting(body: SettingWrite, _: str = Depends(require_auth)):
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/api/history")
 async def get_history(range: str = Query("7d"), _: str = Depends(require_auth)):
-    return db.get_history(range)
+    return _chronological(db.get_history(range))
+
+
+def _chronological(rows: list[dict]) -> list[dict]:
+    # daily_summary ranges come newest-first; charts read left → right.
+    return sorted(rows, key=lambda r: str(r.get("ts", "")))
 
 @app.get("/api/energy-flow")
 async def get_energy_flow(date: str | None = Query(None), _: str = Depends(require_auth)):
@@ -566,13 +752,30 @@ async def get_battery_schedule(_: str = Depends(require_auth)):
         out["forecast_error"] = str(e)
     return out
 
+_SCHEDULE_BOUNDS = {
+    "threshold_kwh": (0, 100), "day_dod": (0, 100), "night_dod": (0, 100),
+    "max_soc": (0, 100), "charge_cap_soc": (0, 100),
+    "charge_cap_release_current": (1, 500), "charge_cap_full_every_days": (0, 365),
+}
+_SCHEDULE_STATE = {"charge_cap_active", "charge_cap_last_full"}
+
+
 @app.post("/api/battery-schedule")
 async def set_battery_schedule(body: dict, _: str = Depends(require_auth)):
+    global _export_verified
     from battery_schedule import load_schedule, save_schedule
     s = load_schedule()
+    if "zero_export" in body:
+        _export_verified = False   # re-check the inverter on the next tick
     for k, v in body.items():
-        if hasattr(s, k):
-            setattr(s, k, v)
+        if k in _SCHEDULE_STATE or not hasattr(s, k):
+            continue               # scheduler-owned state is not client-writable
+        lo_hi = _SCHEDULE_BOUNDS.get(k)
+        if lo_hi and not (lo_hi[0] <= float(v) <= lo_hi[1]):
+            # An out-of-range DoD is ignored by the inverter, which the
+            # scheduler then reads as a lost write and re-sends every cycle.
+            raise HTTPException(400, f"{k} must be between {lo_hi[0]} and {lo_hi[1]}")
+        setattr(s, k, v)
     save_schedule(s)
     return {"ok": True}
 
@@ -611,8 +814,12 @@ async def get_system_config(_: str = Depends(require_auth)):
         "poll_interval": cfg.poll_interval,
     }
 
+_reconnect_task: asyncio.Task | None = None
+
+
 @app.post("/api/system-config")
 async def set_system_config(body: dict, _: str = Depends(require_auth)):
+    global _reconnect_task
     from config import save_env_value
     out = {}
 
@@ -632,7 +839,11 @@ async def set_system_config(body: dict, _: str = Depends(require_auth)):
         save_env_value("INVERTER_HOST", host)
         out["inverter_host"] = host
         log.info("Inverter host changed to %s — reconnecting …", host)
-        asyncio.create_task(connect_inverter())   # swaps the global `inverter` once connected
+        # One reconnect at a time: connect_inverter() retries forever, so each
+        # host change (or a typo) would otherwise leave another loop running.
+        if _reconnect_task and not _reconnect_task.done():
+            _reconnect_task.cancel()
+        _reconnect_task = asyncio.create_task(connect_inverter())   # swaps the global `inverter` once connected
 
     return {"ok": True, **out}
 
@@ -750,24 +961,41 @@ async def get_financials(range: str = Query("7d"), _: str = Depends(require_auth
     Returns per-day financial breakdown for the requested range,
     plus totals and cumulative payback progress.
     """
-    t    = load_tariffs()
-    rows = db.get_history(range)
+    t = load_tariffs()
+    # Priced per DAY even for 12 months — time-of-use needs each day's hourly
+    # import split, which a monthly SUM would lose.
+    days = {"7d": 7, "30d": 30}.get(range, 366)
+    daily = db.daily_rows(days)
+    keys = ("e_day", "e_day_exp", "e_day_imp", "e_load_day",
+            "e_bat_charge_day", "e_bat_discharge_day")
+    buckets: dict[str, dict] = {}
+    for row in daily:
+        fin = day_financials(t, row)
+        label = row["date"][:7] if range == "12m" else row["date"]
+        b = buckets.setdefault(label, {"ts": label, **{k: 0.0 for k in keys}, "fin": {}})
+        for k in keys:
+            b[k] += float(row.get(k) or 0)
+        for k, v in fin.items():
+            if isinstance(v, (int, float)) and not k.endswith(("_pct", "_rate")):
+                b["fin"][k] = b["fin"].get(k, 0.0) + v
+
     result = []
     totals = {
         "import_cost": 0.0, "export_revenue": 0.0,
         "self_consumed_savings": 0.0, "bat_savings_value": 0.0,
         "net_benefit": 0.0, "co2_avoided_kg": 0.0,
     }
-    for row in rows:
-        fin = calc_financials(
-            t,
-            e_imp    = float(row.get("e_day_imp",           0) or 0),
-            e_exp    = float(row.get("e_day_exp",           0) or 0),
-            e_solar  = float(row.get("e_day",               0) or 0),
-            e_load   = float(row.get("e_load_day",          0) or 0),
-            e_bat_dis= float(row.get("e_bat_discharge_day", 0) or 0),
-        )
-        result.append({"date": row.get("ts", ""), **row, **fin})
+    for label in sorted(buckets):
+        b = buckets[label]
+        fin = {k: round(v, 3) for k, v in b.pop("fin").items()}
+        # Ratios from the bucket's summed energies, not summed percentages.
+        ratios = calc_financials(t, e_imp=b["e_day_imp"], e_exp=b["e_day_exp"],
+                                 e_solar=b["e_day"], e_load=b["e_load_day"],
+                                 e_bat_dis=b["e_bat_discharge_day"], e_bat_chg=b["e_bat_charge_day"])
+        fin.update({k: ratios[k] for k in ("self_sufficiency_pct", "self_consumption_pct",
+                                           "import_rate", "export_rate", "currency")})
+        result.append({"date": label, **{k: round(v, 3) if isinstance(v, float) else v
+                                          for k, v in b.items()}, **fin})
         for k in totals:
             totals[k] = round(totals[k] + fin.get(k, 0), 3)
 
@@ -949,8 +1177,8 @@ async def get_templates(_: str = Depends(require_auth)):
 @app.post("/api/automations/from-template")
 async def create_from_template(body: dict, _: str = Depends(require_auth)):
     """
-    Instantiate one or more automations from a template.
-    body: { template_id, params: { key: value, ... } }
+    Instantiate an automation from a template.
+    body: { template_id, params: { "conditions.0.value": 80, ... } }
     """
     tid    = body.get("template_id", "")
     params = body.get("params", {})
@@ -959,148 +1187,29 @@ async def create_from_template(body: dict, _: str = Depends(require_auth)):
     if not tpl:
         raise HTTPException(404, f"Template '{tid}' not found")
 
-    autos   = auto_engine.load()
-    created = []
+    autos = auto_engine.load()
+    # Deep copies: the param overrides below mutate these dicts, and they
+    # must not write back into the shared TEMPLATES.
+    a = auto_engine.Automation(
+        id=auto_engine._next_id(autos),
+        name=params.get("name", tpl.get("name", "Automation")),
+        description=tpl.get("description", ""),
+        logic=tpl.get("logic", "AND"),
+        conditions=copy.deepcopy(tpl.get("conditions", [])),
+        actions=copy.deepcopy(tpl.get("actions", [])),
+        cooldown=tpl.get("cooldown", 5),
+    )
+    # Keyed by the full path: two params can share a last segment
+    # (peak shaving: conditions.0.value W and conditions.1.value %).
+    for tp in tpl.get("params", []):
+        section, idx, field = tp["key"].split(".")
+        items = a.conditions if section == "conditions" else a.actions
+        if int(idx) < len(items):
+            items[int(idx)][field] = params.get(tp["key"], tp.get("default"))
 
-    def make(name, description, logic, conditions, actions, cooldown, hysteresis=3.0):
-        a = auto_engine.Automation(
-            id=auto_engine._next_id(autos + created),
-            name=name, description=description,
-            logic=logic, conditions=conditions, actions=actions,
-            cooldown=cooldown, hysteresis=hysteresis,
-        )
-        return a
-
-    if tid == "tpl_self_use":
-        max_soc      = int(params.get("max_soc", 90))
-        min_soc      = int(params.get("min_soc", 20))
-        cdwn         = int(params.get("cooldown", 10))
-        export_limit = int(params.get("export_limit", 6000))
-
-        created.append(make(
-            "Zero export (battery priority)",
-            f"Export=0 while SoC<{max_soc}% so solar charges battery first",
-            "AND",
-            [{"sensor":"battery_soc","op":"lt","value":max_soc,"value2":0}],
-            [{"type":"write_setting","setting":"grid_export_limit","value":0,"message":""}],
-            cdwn,
-        ))
-        created.append(make(
-            f"Restore export when battery ≥{max_soc}%",
-            "Re-enable grid export once battery is full",
-            "AND",
-            [{"sensor":"battery_soc","op":"gte","value":max_soc,"value2":0}],
-            [{"type":"write_setting","setting":"grid_export_limit","value":export_limit,"message":""},
-             {"type":"set_general_mode","setting":"","value":None,"message":""}],
-            cdwn,
-        ))
-        created.append(make(
-            f"Min SoC floor ≥{min_soc}%",
-            f"Start ECO charge when SoC drops below {min_soc}%",
-            "AND",
-            [{"sensor":"battery_soc","op":"lte","value":min_soc,"value2":0}],
-            [{"type":"eco_charge","setting":"","value":None,"soc":min_soc,"message":""},
-             {"type":"notify","setting":"","value":None,
-              "message":f"🔋 Battery below {min_soc}% — ECO charge to hold {min_soc}%"}],
-            cdwn,
-        ))
-        created.append(make(
-            f"Stop ECO charge when full ≥{max_soc}%",
-            "Switch back to General mode once battery is charged",
-            "AND",
-            [{"sensor":"battery_soc","op":"gte","value":max_soc,"value2":0}],
-            [{"type":"set_general_mode","setting":"","value":None,"message":""},
-             {"type":"notify","setting":"","value":None,
-              "message":f"✅ Battery at {max_soc}% — back to General/Self-Use mode"}],
-            cdwn,
-        ))
-
-    elif tid == "tpl_smart_self_use":
-        max_soc      = int(params.get("max_soc", 90))
-        min_soc      = int(params.get("min_soc", 20))
-        eve_target   = int(params.get("evening_target", 85))
-        export_limit = int(params.get("export_limit", 6000))
-        hyst         = float(params.get("hysteresis", 3))
-
-        # Rule 1: zero export while battery not full
-        # Hysteresis: after firing (SoC was < max_soc), won't re-fire until SoC
-        # has risen to max_soc (clearing the lt condition) and then dropped back.
-        # The pair with Rule 2 ensures no thrashing at the boundary.
-        created.append(make(
-            "Zero export → battery first",
-            f"No grid export while SoC < {max_soc}%  "
-            f"(hysteresis {hyst}% — won't re-fire until SoC rises {hyst}% above last trigger)",
-            "AND",
-            [{"sensor":"battery_soc","op":"lt","value":max_soc,"value2":0}],
-            [{"type":"write_setting","setting":"grid_export_limit","value":0,"message":""}],
-            10, hyst,
-        ))
-        # Rule 2: restore export once full
-        created.append(make(
-            f"Restore export at {max_soc}%",
-            f"Re-enable export when battery ≥ {max_soc}%  "
-            f"(hysteresis {hyst}% — won't re-fire until SoC drops to {max_soc - hyst:.0f}% first)",
-            "AND",
-            [{"sensor":"battery_soc","op":"gte","value":max_soc,"value2":0}],
-            [{"type":"write_setting","setting":"grid_export_limit","value":export_limit,"message":""},
-             {"type":"set_general_mode","setting":"","value":None,"message":""}],
-            10, hyst,
-        ))
-        # Rule 3: min SoC floor — night reserve protection
-        created.append(make(
-            f"Min SoC floor {min_soc}% (night reserve)",
-            f"Start ECO charge if battery drops ≤ {min_soc}%  "
-            f"(hysteresis {hyst}% — re-arms once SoC rises to {min_soc + hyst:.0f}%)",
-            "AND",
-            [{"sensor":"battery_soc","op":"lte","value":min_soc,"value2":0}],
-            [{"type":"eco_charge","setting":"","value":None,"soc":min_soc,"message":""},
-             {"type":"notify","setting":"","value":None,
-              "message":f"⚠️ SoC below {min_soc}% — ECO charge to hold {min_soc}%"}],
-            10, hyst,
-        ))
-        # Rule 4: pre-evening boost (long cooldown — fires at most once per afternoon)
-        created.append(make(
-            f"Pre-evening boost → {eve_target}%",
-            f"ECO charge if battery below {eve_target}% (cooldown 2 h — fires at most once per afternoon)",
-            "AND",
-            [{"sensor":"battery_soc","op":"lt","value":eve_target,"value2":0}],
-            [{"type":"eco_charge","setting":"","value":None,"soc":eve_target,"message":""},
-             {"type":"notify","setting":"","value":None,
-              "message":f"☀️ Pre-evening charge started — target {eve_target}% before dark"}],
-            120, hyst,
-        ))
-
-    else:
-        # Generic single automation from template
-        a = make(
-            params.get("name", tpl.get("name", "Automation")),
-            tpl.get("description", ""),
-            tpl.get("logic", "AND"),
-            tpl.get("conditions", []),
-            tpl.get("actions", []),
-            tpl.get("cooldown", 5),
-        )
-        # Apply param overrides to nested structures
-        for tp in tpl.get("params", []):
-            val = params.get(tp["key"].split(".")[-1], tp.get("default"))
-            key = tp["key"]
-            if key.startswith("conditions."):
-                parts = key.split(".")
-                idx   = int(parts[1])
-                field = parts[2]
-                if idx < len(a.conditions):
-                    a.conditions[idx][field] = val
-            elif key.startswith("actions."):
-                parts = key.split(".")
-                idx   = int(parts[1])
-                field = parts[2]
-                if idx < len(a.actions):
-                    a.actions[idx][field] = val
-        created.append(a)
-
-    autos.extend(created)
+    autos.append(a)
     auto_engine.save(autos)
-    return [asdict(c) for c in created]
+    return [asdict(a)]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

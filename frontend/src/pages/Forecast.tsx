@@ -147,26 +147,29 @@ export default function Forecast() {
   useEffect(() => {
     loadConfig()
     loadForecast()
-    fetch('/api/forecast/accuracy', { headers }).then(r => r.json()).then(setAccuracy).catch(() => {})
-    fetch('/api/battery-schedule', { headers }).then(r => r.json()).then(setHold).catch(() => {})
+    // Reject non-OK: a 401/500 body ({detail}) rendered as data crashes the page.
+    const ok = (r: Response) => r.ok ? r.json() : Promise.reject(r.status)
+    fetch('/api/forecast/accuracy', { headers }).then(ok).then(setAccuracy).catch(() => {})
+    fetch('/api/battery-schedule', { headers }).then(ok).then(setHold).catch(() => {})
   }, [])
 
   async function loadConfig() {
     try {
       const res = await fetch('/api/forecast/config', { headers })
-      setConfig(await res.json())
+      if (res.ok) setConfig(await res.json())
     } catch { /* ignore */ }
   }
 
-  async function loadForecast() {
+  async function loadForecast(force = false) {
     setLoading(true)
     try {
-      const res = await fetch('/api/forecast', { headers })
+      const res = await fetch(`/api/forecast${force ? '?force=true' : ''}`, { headers })
+      if (!res.ok) return
       const json = await res.json()
       setForecast(json)
       if (!json.configured) setShowConfig(true)
     } catch { /* ignore */ }
-    setLoading(false)
+    finally { setLoading(false) }
   }
 
   async function saveConfig(cfg: ForecastConfig) {
@@ -208,7 +211,7 @@ export default function Forecast() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={loadForecast}
+          <button onClick={() => loadForecast(true)}
             className="p-2 text-gray-500 hover:text-gray-300 transition-colors">
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
           </button>

@@ -9,7 +9,6 @@ Supports:
 """
 
 import json
-import time
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from pathlib import Path
@@ -100,6 +99,18 @@ def _vat(val: float, vat_pct: float) -> float:
     return val * (1 + vat_pct / 100)
 
 
+def _hour_rate(t: TariffConfig, hour: int) -> float:
+    """Import rate in effect for a local clock hour (sampled at its midpoint)."""
+    return current_import_rate(t, datetime(2000, 1, 1, hour, 30))
+
+
+def mean_import_rate(t: TariffConfig) -> float:
+    """24-hour average import rate — values self-consumed kWh under TOU."""
+    if not t.tou_enabled or not t.tou_periods:
+        return t.import_rate
+    return sum(_hour_rate(t, h) for h in range(24)) / 24
+
+
 def calc_financials(
     t: TariffConfig,
     e_imp: float,      # kWh imported from grid
@@ -107,27 +118,37 @@ def calc_financials(
     e_solar: float,    # kWh total solar production
     e_load: float,     # kWh total home consumption
     e_bat_dis: float,  # kWh discharged from battery
-    import_rate: float | None = None,
+    e_bat_chg: float = 0.0,             # kWh charged into the battery
+    imp_by_hour: list | None = None,    # kWh imported per local hour (TOU pricing)
 ) -> dict:
     """
     Returns a dict with all financial and sustainability metrics.
     All monetary values are in the configured currency.
+
+    Solar that goes through the battery is valued ONCE, when it is
+    discharged (e_bat_dis) — the direct-use part excludes what was charged.
+    Counting `solar - export` plus the discharge credited it twice.
     """
-    ir = import_rate if import_rate is not None else t.import_rate
+    ir = mean_import_rate(t)
     er = t.export_rate
 
-    # What you paid for grid electricity
-    import_cost = _vat(e_imp * ir, t.vat_pct)
+    # What you paid for grid electricity — hour by hour under TOU when the
+    # hourly split is known (days with snapshots), else at the mean rate.
+    if t.tou_enabled and imp_by_hour and len(imp_by_hour) == 24:
+        import_net = sum(float(kwh or 0) * _hour_rate(t, h) for h, kwh in enumerate(imp_by_hour))
+    else:
+        import_net = e_imp * ir
+    import_cost = _vat(import_net, t.vat_pct)
 
     # Revenue from selling solar surplus
     export_revenue = e_exp * er                    # usually no VAT on revenue
 
-    # kWh consumed from solar + battery (not imported)
-    self_consumed = max(0.0, e_solar - e_exp)      # solar directly used
+    solar_used      = max(0.0, e_solar - e_exp)            # into the house + battery
+    direct_used     = max(0.0, solar_used - e_bat_chg)     # straight into the house
     bat_savings_kwh = e_bat_dis                    # battery discharged instead of importing
 
     # What those kWh would have cost on the grid
-    self_consumed_savings = _vat(self_consumed * ir, t.vat_pct)
+    self_consumed_savings = _vat(direct_used * ir, t.vat_pct)
     bat_savings_value     = _vat(bat_savings_kwh * ir, t.vat_pct)
 
     total_savings = self_consumed_savings + bat_savings_value + export_revenue
@@ -135,14 +156,14 @@ def calc_financials(
 
     # Ratios
     self_sufficiency = (max(0.0, e_load - e_imp) / e_load * 100) if e_load > 0 else 0.0
-    self_consumption = (self_consumed / e_solar * 100)            if e_solar > 0 else 0.0
+    self_consumption = (solar_used / e_solar * 100)               if e_solar > 0 else 0.0
 
     # CO₂ avoided (vs grid)
-    co2_avoided_kg = self_consumed * t.co2_grid_gkg
+    co2_avoided_kg = solar_used * t.co2_grid_gkg
 
     return {
         "currency":               t.currency,
-        "import_rate":            ir,
+        "import_rate":            round(ir, 4),
         "export_rate":            er,
         "import_cost":            round(import_cost, 3),
         "export_revenue":         round(export_revenue, 3),
@@ -154,3 +175,21 @@ def calc_financials(
         "self_consumption_pct":   round(self_consumption, 1),
         "co2_avoided_kg":         round(co2_avoided_kg, 3),
     }
+
+
+def day_financials(t: TariffConfig, row: dict) -> dict:
+    """calc_financials for one daily_summary row (or a 12-month aggregate)."""
+    hours = row.get("imp_by_hour")
+    if isinstance(hours, str):
+        try:
+            hours = json.loads(hours)
+        except ValueError:
+            hours = None
+
+    def f(k: str) -> float:
+        return float(row.get(k) or 0)
+
+    return calc_financials(
+        t, e_imp=f("e_day_imp"), e_exp=f("e_day_exp"), e_solar=f("e_day"),
+        e_load=f("e_load_day"), e_bat_dis=f("e_bat_discharge_day"),
+        e_bat_chg=f("e_bat_charge_day"), imp_by_hour=hours)

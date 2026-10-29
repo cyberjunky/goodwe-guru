@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Euro, TrendingUp, TrendingDown, Leaf, RefreshCw, BarChart2 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -65,6 +65,7 @@ export default function Finance() {
   const [range, setRange]   = useState<Range>('30d')
   const [data, setData]     = useState<FinData | null>(null)
   const [loading, setLoading] = useState(false)
+  const seq = useRef(0)   // only the latest request may set state (range clicks race)
   const token = localStorage.getItem('gw_token') ?? ''
 
   const headers = { Authorization: `Bearer ${token}` }
@@ -72,12 +73,14 @@ export default function Finance() {
   useEffect(() => { load() }, [range])
 
   async function load() {
+    const my = ++seq.current
     setLoading(true)
     try {
       const res  = await fetch(`/api/financials?range=${range}`, { headers })
-      setData(await res.json())
+      const json = res.ok ? await res.json() : null   // a {detail} error body would crash the render
+      if (json && my === seq.current) setData(json)
     } catch { /* ignore */ }
-    setLoading(false)
+    finally { if (my === seq.current) setLoading(false) }
   }
 
   const RANGES: { key: Range; label: string }[] = [

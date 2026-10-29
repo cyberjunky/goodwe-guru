@@ -22,6 +22,7 @@ Sent outside the poll tick:
                        scheduler and the Telegram bot alike), success or failure
   - hold_violation     the battery is discharging while the scheduler believes
                        it is held (the inverter ignored / dropped the DoD write)
+  - export_violation   power is going to the grid while zero-export is on
 
 Setup:
   1. Create a Telegram bot via @BotFather → get BOT_TOKEN
@@ -30,6 +31,7 @@ Setup:
   3. Enter BOT_TOKEN + CHAT_ID in Settings → Notifications
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -68,6 +70,7 @@ class NotificationConfig:
     inverter_offline_enabled: bool  = True
     inverter_write_enabled:   bool  = True   # every command we send to the inverter
     hold_violation_enabled:   bool  = True   # discharging while the hold says it shouldn't
+    export_violation_enabled: bool  = True   # exporting while zero-export is on
 
     # Thresholds
     bat_critical_soc:         int   = 10
@@ -147,6 +150,7 @@ class NotificationState:
         self.inverter_offline_since: float | None = None
         self.inverter_offline_sent = False
         self.hold_violation_sent   = False
+        self.export_violation_sent = False
 
 
 _state = NotificationState()
@@ -192,6 +196,7 @@ _WRITE_LABELS = {
     "dod":               "On-grid DoD",
     "charge_i":          "Charge current",
     "grid_export_limit": "Grid export limit",
+    "grid_export":       "Export limit switch",
     "eco_charge":        "Eco charge",
     "eco_discharge":     "Eco discharge",
 }
@@ -256,8 +261,48 @@ async def notify_hold_violation(soc: float, discharge_w: float, dod: int | None,
         log.warning("notify_hold_violation: %s", e)
 
 
+async def notify_export_violation(export_w: float, limit: int | None, enabled: int | None,
+                                  resending: bool = False, recovered: bool = False) -> None:
+    """Power is going to the grid although zero-export is on. Edge-triggered."""
+    try:
+        nc = load_notification_config()
+        if not nc.enabled or not nc.export_violation_enabled:
+            return
+        if recovered:
+            if not _state.export_violation_sent:
+                return
+            _state.export_violation_sent = False
+            await send_telegram(nc, "✅ <b>Zero export is holding again</b> — no more grid export.")
+            return
+        if _state.export_violation_sent:
+            return
+        _state.export_violation_sent = True
+        state = ("settings unreadable" if limit is None
+                 else f"limit {limit} W, switch {'on' if enabled else 'OFF'}")
+        action = ("Re-sending the zero-export settings." if resending
+                  else "The inverter reports the correct settings — firmware is not "
+                       "honouring them (meter/CT problem?). Not re-writing.")
+        await send_telegram(nc,
+            f"⚡ <b>Exporting to the grid despite zero-export</b>\n"
+            f"{fmt_power(export_w)} going out ({state}).\n{action}")
+    except Exception as e:
+        log.warning("notify_export_violation: %s", e)
+
+
+_check_lock = asyncio.Lock()
+
+
 async def check_and_notify(data: dict[str, Any], daily_stats: dict[str, Any] | None = None,
                            get_flow: Any = None):
+    """Serialised: spawned as a task every poll tick, and the edge flags are
+    set after awaiting Telegram — two overlapping ticks would both see
+    "not sent yet" and send the same alert twice."""
+    async with _check_lock:
+        await _check_and_notify(data, daily_stats, get_flow)
+
+
+async def _check_and_notify(data: dict[str, Any], daily_stats: dict[str, Any] | None = None,
+                            get_flow: Any = None):
     """
     Call once per poll tick with the latest inverter data.
     daily_stats: today's summary from the database (for daily summary message).
@@ -284,7 +329,7 @@ async def check_and_notify(data: dict[str, Any], daily_stats: dict[str, Any] | N
                 f"State of Charge: <b>{soc}%</b>\n"
                 f"⚠️ Charge immediately to avoid damage or outage.")
             _state.bat_critical_sent = True
-    elif soc > nc.bat_critical_soc + _state.__class__.__dict__.get("bat_hysteresis", nc.bat_hysteresis):
+    elif soc > nc.bat_critical_soc + nc.bat_hysteresis:
         _state.bat_critical_sent = False
 
     # ── Battery low ───────────────────────────────────────────────────────
@@ -316,6 +361,11 @@ async def check_and_notify(data: dict[str, Any], daily_stats: dict[str, Any] | N
                 f"Error code: <code>{error_codes}</code>\n"
                 f"Work mode: {work_mode}\n"
                 f"Check the Faults page for details.")
+        elif has_fault and error_codes != _state.last_fault_codes:
+            await send_telegram(nc,
+                f"⚠️ <b>Inverter fault changed</b>\n"
+                f"Error code: <code>{_state.last_fault_codes}</code> → <code>{error_codes}</code>")
+            _state.last_fault_codes = error_codes
         elif not has_fault and _state.fault_active:
             _state.fault_active = False
             await send_telegram(nc, "✅ <b>Inverter fault cleared</b> — system back to normal.")
@@ -386,9 +436,11 @@ async def check_and_notify(data: dict[str, Any], daily_stats: dict[str, Any] | N
 
             # Financial snapshot if tariffs configured
             try:
-                from tariffs import load_tariffs, calc_financials
-                t = load_tariffs()
-                fin = calc_financials(t, e_imp, e_exp, e_day, e_load, e_bdis)
+                from tariffs import load_tariffs, day_financials
+                fin = day_financials(load_tariffs(), {
+                    **daily_stats, "e_day": e_day, "e_day_imp": e_imp, "e_day_exp": e_exp,
+                    "e_load_day": e_load, "e_bat_charge_day": e_bch,
+                    "e_bat_discharge_day": e_bdis})
                 fin_line = (
                     f"\n💶 Net benefit today: <b>{fin['currency']}{fin['net_benefit']:.2f}</b>"
                     f"\n   Import cost:  {fin['currency']}{fin['import_cost']:.2f}"
